@@ -39,7 +39,7 @@ contribution follows the linting rules and passes clippy.
 
 ## Provenance note
 
-These crates was originally part of the [reth] project, as [`reth_rlp`] and [`reth_rlp_derive`].
+These crates were originally part of the [reth] project, as [`reth_rlp`] and [`reth_rlp_derive`].
 
 `reth_rlp` was forked from an earlier Apache-licensed version of the [`fastrlp`]
 crate, before it changed licence to GPL. The Rust `fastrlp` implementation is
