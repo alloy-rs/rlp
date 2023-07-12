@@ -1,0 +1,33 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.3.0"
+edition = "2021"
+rust-version = "1.56"
+authors = ["Alloy Contributors"]
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/alloy-rs/rlp"
+repository = "https://github.com/alloy-rs/rlp"
+exclude = ["benches/", "tests/"]
+
+[workspace.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[workspace.dependencies]
+# workspace crates
+alloy-rlp = { version = "0.3.0", path = "crates/rlp", default-features = false }
+alloy-rlp-derive = { version = "0.3.0", path = "crates/rlp-derive", default-features = false }
+
+# macros
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = "2.0"
+
+hex-literal = "0.4"
+
+# misc
+arrayvec = { version = "0.7", default-features = false }
+bytes = { version = "1.4", default-features = false }

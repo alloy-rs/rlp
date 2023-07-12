@@ -1,0 +1,9 @@
+reorder_imports = true
+use_field_init_shorthand = true
+
+# Nightly
+max_width = 100
+comment_width = 80
+imports_granularity = "Crate"
+trailing_semicolon = false
+wrap_comments = true

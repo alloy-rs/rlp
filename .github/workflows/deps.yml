@@ -1,0 +1,17 @@
+name: deps
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
+
+jobs:
+    cargo-deny:
+        name: cargo deny check
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v3
+            - uses: EmbarkStudios/cargo-deny-action@v1
+              with:
+                  command: check all
