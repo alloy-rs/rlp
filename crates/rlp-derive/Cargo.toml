@@ -1,7 +1,7 @@
 [package]
 name = "alloy-rlp-derive"
 description = "Derive macros for alloy-rlp"
-keywords = ["ethereum", "rlp", "serialization"]
+keywords = ["ethereum", "rlp", "serialization", "macros"]
 categories = ["encoding", "cryptography::cryptocurrencies"]
 homepage = "https://github.com/alloy-rs/rlp/tree/main/crates/rlp-derive"
 
