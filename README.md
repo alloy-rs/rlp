@@ -23,7 +23,7 @@ When updating this, also update:
 
 Alloy will keep a rolling MSRV (minimum supported rust version) policy of **at
 least** 6 months. When increasing the MSRV, the new Rust version must have been
-released at least six months ago. The current MSRV is 1.65.0.
+released at least six months ago. The current MSRV is 1.64.0.
 
 Note that the MSRV is not increased automatically, and only as part of a minor
 release.
@@ -46,8 +46,8 @@ crate, before it changed licence to GPL. The Rust `fastrlp` implementation is
 itself a port of the [Golang Apache-licensed fastrlp][gofastrlp].
 
 [reth]: https://github.com/paradigmxyz/reth
-[`reth_rlp`]: https://github.com/paradigmxyz/reth/tree/99a314c59bbd94a34a285369da95fb5604883c65/crates/rlp
-[`reth_rlp_derive`]: https://github.com/paradigmxyz/reth/tree/99a314c59bbd94a34a285369da95fb5604883c65/crates/rlp/rlp-derive
+[`reth_rlp`]: https://github.com/paradigmxyz/reth/tree/e2218bea37aa455b4fd6602fe71a8fbe0974f12b/crates/rlp
+[`reth_rlp_derive`]: https://github.com/paradigmxyz/reth/tree/e2218bea37aa455b4fd6602fe71a8fbe0974f12b/crates/rlp/rlp-derive
 [`fastrlp`]: https://github.com/vorot93/fastrlp
 [gofastrlp]: https://github.com/umbracle/fastrlp
 
