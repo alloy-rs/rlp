@@ -348,7 +348,7 @@ pub const fn length_of_length(payload_length: usize) -> usize {
     if payload_length < 56 {
         1
     } else {
-        1 + 8 - payload_length.leading_zeros() as usize / 8
+        1 + (usize::BITS as usize / 8) - payload_length.leading_zeros() as usize / 8
     }
 }
 
