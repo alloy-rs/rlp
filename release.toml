@@ -1,0 +1,4 @@
+allow-branch = ["main"]
+# do not tag based on crate name
+tag = true
+tag-prefix = ""
