@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2023-07-13
+
+### Fixed
+
+- `length_of_length` for non 64-bit platforms ([#2])
+
+[#2]: https://github.com/alloy-rs/rlp/pull/2
+
 ## [0.3.0] - 2023-07-12
 
 ### Added
