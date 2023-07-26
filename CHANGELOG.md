@@ -7,11 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `encode` function ([#5])
+
 ### Changed
 
 - Inline derive macros' docs ([#3])
 
 [#3]: https://github.com/alloy-rs/rlp/pull/3
+[#5]: https://github.com/alloy-rs/rlp/pull/5
 
 ## [0.3.1] - 2023-07-13
 

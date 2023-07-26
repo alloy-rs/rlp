@@ -1,4 +1,5 @@
 use crate::{Header, EMPTY_STRING_CODE};
+use alloc::vec::Vec;
 use bytes::{BufMut, Bytes, BytesMut};
 use core::borrow::Borrow;
 
@@ -17,7 +18,7 @@ pub trait Encodable {
     /// specialized implementation.
     #[inline]
     fn length(&self) -> usize {
-        let mut out = alloc::vec::Vec::new();
+        let mut out = Vec::new();
         self.encode(&mut out);
         out.len()
     }
@@ -172,7 +173,7 @@ macro_rules! uint_impl {
 
 uint_impl!(u8, u16, u32, u64, usize, u128);
 
-impl<T: Encodable> Encodable for alloc::vec::Vec<T> {
+impl<T: Encodable> Encodable for Vec<T> {
     #[inline]
     fn length(&self) -> usize {
         list_length(self)
@@ -265,20 +266,28 @@ mod std_support {
     }
 }
 
-#[inline]
-fn rlp_list_header<T, E>(v: &[T]) -> Header
-where
-    T: Borrow<E>,
-    E: ?Sized + Encodable,
-{
-    let mut h = Header {
-        list: true,
-        payload_length: 0,
-    };
-    for x in v {
-        h.payload_length += x.borrow().length();
-    }
-    h
+/// Encode a value.
+///
+/// Prefer using [`encode_fixed_size`] if a type implements [`MaxEncodedLen`].
+pub fn encode<T: Encodable>(value: T) -> Vec<u8> {
+    let mut out = Vec::with_capacity(value.length());
+    value.encode(&mut out);
+    out
+}
+
+/// Encode a type with a known maximum size.
+#[cfg(feature = "arrayvec")]
+pub fn encode_fixed_size<E: MaxEncodedLen<LEN>, const LEN: usize>(v: &E) -> ArrayVec<u8, LEN> {
+    let mut out = [0; LEN];
+
+    let mut s = &mut out[..];
+    v.encode(&mut s);
+    let written = LEN - s.len();
+
+    // SAFETY: `written <= LEN` and all bytes are initialized.
+    let mut vec = ArrayVec::from(out);
+    unsafe { vec.set_len(written) };
+    vec
 }
 
 /// Calculate the length of a list.
@@ -288,7 +297,7 @@ where
     E: ?Sized + Encodable,
 {
     let payload_length = rlp_list_header(list).payload_length;
-    length_of_length(payload_length) + payload_length
+    payload_length + length_of_length(payload_length)
 }
 
 /// Encode a list of items.
@@ -297,8 +306,7 @@ where
     T: Borrow<E>,
     E: ?Sized + Encodable,
 {
-    let h = rlp_list_header(list);
-    h.encode(out);
+    rlp_list_header(list).encode(out);
     for t in list {
         t.borrow().encode(out);
     }
@@ -327,21 +335,6 @@ where
     }
 }
 
-/// Encode a type with a known maximum size.
-#[cfg(feature = "arrayvec")]
-pub fn encode_fixed_size<E: MaxEncodedLen<LEN>, const LEN: usize>(v: &E) -> ArrayVec<u8, LEN> {
-    let mut out = ArrayVec::from([0_u8; LEN]);
-
-    let mut s = out.as_mut_slice();
-
-    v.encode(&mut s);
-
-    let final_len = LEN - s.len();
-    out.truncate(final_len);
-
-    out
-}
-
 /// Determine the length in bytes of the length prefix of an RLP item.
 #[inline]
 pub const fn length_of_length(payload_length: usize) -> usize {
@@ -352,17 +345,26 @@ pub const fn length_of_length(payload_length: usize) -> usize {
     }
 }
 
+#[inline]
+fn rlp_list_header<T, E>(v: &[T]) -> Header
+where
+    T: Borrow<E>,
+    E: ?Sized + Encodable,
+{
+    let mut h = Header {
+        list: true,
+        payload_length: 0,
+    };
+    for x in v {
+        h.payload_length += x.borrow().length();
+    }
+    h
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::BytesMut;
     use hex_literal::hex;
-
-    fn encoded<T: Encodable>(t: T) -> BytesMut {
-        let mut out = BytesMut::new();
-        t.encode(&mut out);
-        out
-    }
 
     fn encoded_list<T: Encodable + Clone>(t: &[T]) -> BytesMut {
         let mut out1 = BytesMut::new();
@@ -386,9 +388,9 @@ mod tests {
 
     #[test]
     fn rlp_str() {
-        assert_eq!(encoded("")[..], hex!("80")[..]);
-        assert_eq!(encoded("{")[..], hex!("7b")[..]);
-        assert_eq!(encoded("test str")[..], hex!("887465737420737472")[..]);
+        assert_eq!(encode("")[..], hex!("80")[..]);
+        assert_eq!(encode("{")[..], hex!("7b")[..]);
+        assert_eq!(encode("test str")[..], hex!("887465737420737472")[..]);
     }
 
     #[cfg(feature = "smol_str")]
@@ -397,21 +399,21 @@ mod tests {
         use alloc::string::ToString;
         use smol_str::SmolStr;
 
-        assert_eq!(encoded(SmolStr::new(""))[..], hex!("80")[..]);
+        assert_eq!(encode(SmolStr::new(""))[..], hex!("80")[..]);
         let mut b = BytesMut::new();
         "test smol str".to_string().encode(&mut b);
-        assert_eq!(&encoded(SmolStr::new("test smol str"))[..], b.as_ref());
+        assert_eq!(&encode(SmolStr::new("test smol str"))[..], b.as_ref());
         let mut b = BytesMut::new();
         "abcdefgh".to_string().encode(&mut b);
-        assert_eq!(&encoded(SmolStr::new("abcdefgh"))[..], b.as_ref());
+        assert_eq!(&encode(SmolStr::new("abcdefgh"))[..], b.as_ref());
     }
 
     #[test]
     fn rlp_strings() {
-        assert_eq!(encoded(hex!(""))[..], hex!("80")[..]);
-        assert_eq!(encoded(hex!("7B"))[..], hex!("7b")[..]);
-        assert_eq!(encoded(hex!("80"))[..], hex!("8180")[..]);
-        assert_eq!(encoded(hex!("ABBA"))[..], hex!("82abba")[..]);
+        assert_eq!(encode(hex!(""))[..], hex!("80")[..]);
+        assert_eq!(encode(hex!("7B"))[..], hex!("7b")[..]);
+        assert_eq!(encode(hex!("80"))[..], hex!("8180")[..]);
+        assert_eq!(encode(hex!("ABBA"))[..], hex!("82abba")[..]);
     }
 
     fn c<T, U: From<T>>(
@@ -459,7 +461,7 @@ mod tests {
     macro_rules! uint_rlp_test {
         ($fixtures:expr) => {
             for (input, output) in $fixtures {
-                assert_eq!(encoded(input), output);
+                assert_eq!(encode(input), output);
             }
         };
     }
