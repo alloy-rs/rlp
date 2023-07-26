@@ -30,5 +30,6 @@ hex-literal.workspace = true
 default = ["std"]
 std = ["bytes/std", "arrayvec?/std", "smol_str?/std"]
 derive = ["dep:alloy-rlp-derive"]
+
 arrayvec = ["dep:arrayvec"]
 smol_str = ["dep:smol_str"]
