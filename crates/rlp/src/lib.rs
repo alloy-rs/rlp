@@ -39,7 +39,7 @@ pub use header::Header;
 pub use bytes::{self, Buf, BufMut, Bytes, BytesMut};
 
 #[cfg(feature = "derive")]
-#[doc(no_inline)]
+#[doc(inline)]
 pub use alloy_rlp_derive::{
     RlpDecodable, RlpDecodableWrapper, RlpEncodable, RlpEncodableWrapper, RlpMaxEncodedLen,
 };
