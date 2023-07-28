@@ -26,27 +26,24 @@ impl Decodable for FooBar {
     fn decode(data: &mut &[u8]) -> Result<Self, Error> {
         let mut payload = Header::decode_bytes(data, true)?;
         match u8::decode(&mut payload)? {
-            0 => {
-                let foo = Self::Foo(u64::decode(&mut payload)?);
-                Ok(foo)
-            }
-            1 => {
-                let bar = Self::Bar(u16::decode(&mut payload)?, u64::decode(&mut payload)?);
-                Ok(bar)
-            }
+            0 => Ok(Self::Foo(u64::decode(&mut payload)?)),
+            1 => Ok(Self::Bar(
+                u16::decode(&mut payload)?,
+                u64::decode(&mut payload)?,
+            )),
             _ => Err(Error::Custom("unknown type")),
         }
     }
 }
 
 fn main() {
-    let foo = FooBar::Foo(42);
-    let out = encode(&foo);
-    assert_eq!(FooBar::decode(&mut out.as_ref()), Ok(foo));
+    let val = FooBar::Foo(42);
+    let out = encode(&val);
+    assert_eq!(FooBar::decode(&mut out.as_ref()), Ok(val));
 
-    let bar = FooBar::Bar(7, 42);
-    let out = encode(&bar);
-    assert_eq!(FooBar::decode(&mut out.as_ref()), Ok(bar));
+    let val = FooBar::Bar(7, 42);
+    let out = encode(&val);
+    assert_eq!(FooBar::decode(&mut out.as_ref()), Ok(val));
 
     println!("success!")
 }
