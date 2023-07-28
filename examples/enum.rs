@@ -42,25 +42,19 @@ impl Decodable for FooBar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_rlp::BytesMut;
-
-    fn encode(val: &dyn Encodable) -> BytesMut {
-        let mut out = BytesMut::new();
-        val.encode(&mut out);
-        return out
-    }
+    use alloy_rlp::encode;
 
     #[test]
     fn foo_roundtrip() {
-        let f = FooBar::Foo(42);
-        let out = encode(&f);
-        assert_eq!(Ok(f), FooBar::decode(&mut out.as_ref()));
+        let val = FooBar::Foo(42);
+        let out = encode(&val);
+        assert_eq!(FooBar::decode(&mut out.as_ref()), Ok(val));
     }
 
     #[test]
     fn bar_roundtrip() {
-        let b = FooBar::Bar(7, 42);
-        let out = encode(&b);
-        assert_eq!(Ok(b), FooBar::decode(&mut out.as_ref()));
+        let val = FooBar::Bar(7, 42);
+        let out = encode(&val);
+        assert_eq!(FooBar::decode(&mut out.as_ref()), Ok(val));
     }
 }
