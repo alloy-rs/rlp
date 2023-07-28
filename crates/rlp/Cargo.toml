@@ -33,3 +33,7 @@ derive = ["dep:alloy-rlp-derive"]
 
 arrayvec = ["dep:arrayvec"]
 smol_str = ["dep:smol_str"]
+
+[[example]]
+name = "enum"
+path = "../../examples/enum.rs"

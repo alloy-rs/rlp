@@ -3,7 +3,8 @@ use bytes::{Bytes, BytesMut};
 
 /// A type that can be decoded from an RLP blob.
 pub trait Decodable: Sized {
-    /// Decode the blob into the appropriate type.
+    /// Decodes the blob into the appropriate type. `buf` must be advanced past
+    /// the decoded object.
     fn decode(buf: &mut &[u8]) -> Result<Self>;
 }
 
