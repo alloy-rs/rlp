@@ -1,4 +1,4 @@
-use alloy_rlp::{encode_list, Decodable, Encodable, Error, Header};
+use alloy_rlp::{encode, encode_list, Decodable, Encodable, Error, Header};
 use bytes::BufMut;
 
 #[derive(Debug, PartialEq)]
@@ -39,22 +39,14 @@ impl Decodable for FooBar {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloy_rlp::encode;
+fn main() {
+    let foo = FooBar::Foo(42);
+    let out = encode(&foo);
+    assert_eq!(FooBar::decode(&mut out.as_ref()), Ok(foo));
 
-    #[test]
-    fn foo_roundtrip() {
-        let val = FooBar::Foo(42);
-        let out = encode(&val);
-        assert_eq!(FooBar::decode(&mut out.as_ref()), Ok(val));
-    }
+    let bar = FooBar::Bar(7, 42);
+    let out = encode(&bar);
+    assert_eq!(FooBar::decode(&mut out.as_ref()), Ok(bar));
 
-    #[test]
-    fn bar_roundtrip() {
-        let val = FooBar::Bar(7, 42);
-        let out = encode(&val);
-        assert_eq!(FooBar::decode(&mut out.as_ref()), Ok(val));
-    }
+    println!("success!")
 }

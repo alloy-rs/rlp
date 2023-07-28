@@ -36,5 +36,4 @@ smol_str = ["dep:smol_str"]
 
 [[example]]
 name = "enum"
-crate-type = ["staticlib"]
 path = "../../examples/enum.rs"
