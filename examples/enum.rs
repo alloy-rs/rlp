@@ -47,7 +47,7 @@ mod tests {
     fn encode(val: &dyn Encodable) -> BytesMut {
         let mut out = BytesMut::new();
         val.encode(&mut out);
-        return out;
+        return out
     }
 
     #[test]

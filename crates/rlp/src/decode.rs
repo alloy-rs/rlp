@@ -3,7 +3,8 @@ use bytes::{Bytes, BytesMut};
 
 /// A type that can be decoded from an RLP blob.
 pub trait Decodable: Sized {
-    /// Decodes the blob into the appropriate type. `buf` must be advanced past the decoded object.
+    /// Decodes the blob into the appropriate type. `buf` must be advanced past
+    /// the decoded object.
     fn decode(buf: &mut &[u8]) -> Result<Self>;
 }
 
@@ -176,17 +177,17 @@ mod std_impl {
 #[inline]
 pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
     if data.len() > N {
-        return Err(Error::Overflow);
+        return Err(Error::Overflow)
     }
 
     let mut v = [0; N];
 
     if data.is_empty() {
-        return Ok(v);
+        return Ok(v)
     }
 
     if data[0] == 0 {
-        return Err(Error::LeadingZero);
+        return Err(Error::LeadingZero)
     }
 
     // SAFETY: length checked above
