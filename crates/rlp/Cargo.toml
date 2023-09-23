@@ -24,6 +24,7 @@ arrayvec = { workspace = true, optional = true }
 smol_str = { version = "0.2", default-features = false, optional = true }
 
 [dev-dependencies]
+hex.workspace = true
 hex-literal.workspace = true
 
 [features]
