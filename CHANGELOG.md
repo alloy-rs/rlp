@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `Ip{,v4,v6}Addr::decode` ([#6])
+
+[#6]: https://github.com/alloy-rs/rlp/pull/6
+
 ## [0.3.2] - 2023-07-26
 
 ### Added

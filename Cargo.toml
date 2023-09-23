@@ -26,6 +26,7 @@ proc-macro2 = "1.0"
 quote = "1.0"
 syn = "2.0"
 
+hex = { package = "const-hex", version = "1", default-features = false, features = ["alloc"] }
 hex-literal = "0.4"
 
 # misc

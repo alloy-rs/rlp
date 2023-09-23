@@ -145,8 +145,12 @@ mod std_impl {
         fn decode(buf: &mut &[u8]) -> Result<Self> {
             let bytes = Header::decode_bytes(buf, false)?;
             match bytes.len() {
-                4 => static_left_pad(bytes).map(|octets| Self::V4(Ipv4Addr::from(octets))),
-                16 => static_left_pad(bytes).map(|octets| Self::V6(Ipv6Addr::from(octets))),
+                4 => Ok(Self::V4(Ipv4Addr::from(
+                    slice_to_array::<4>(bytes).expect("infallible"),
+                ))),
+                16 => Ok(Self::V6(Ipv6Addr::from(
+                    slice_to_array::<16>(bytes).expect("infallible"),
+                ))),
                 _ => Err(Error::UnexpectedLength),
             }
         }
@@ -156,7 +160,7 @@ mod std_impl {
         #[inline]
         fn decode(buf: &mut &[u8]) -> Result<Self> {
             let bytes = Header::decode_bytes(buf, false)?;
-            static_left_pad::<4>(bytes).map(Self::from)
+            slice_to_array::<4>(bytes).map(Self::from)
         }
     }
 
@@ -164,7 +168,7 @@ mod std_impl {
         #[inline]
         fn decode(buf: &mut &[u8]) -> Result<Self> {
             let bytes = Header::decode_bytes(buf, false)?;
-            static_left_pad::<16>(bytes).map(Self::from)
+            slice_to_array::<16>(bytes).map(Self::from)
         }
     }
 }
@@ -195,33 +199,42 @@ pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
     Ok(v)
 }
 
+#[inline]
+fn slice_to_array<const N: usize>(slice: &[u8]) -> Result<[u8; N]> {
+    slice.try_into().map_err(|_| Error::UnexpectedLength)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Encodable;
     use alloc::{string::String, vec::Vec};
     use core::fmt::Debug;
     use hex_literal::hex;
 
     fn check_decode<'a, T, IT>(fixtures: IT)
     where
-        T: Decodable + PartialEq + Debug,
+        T: Encodable + Decodable + PartialEq + Debug,
         IT: IntoIterator<Item = (Result<T>, &'a [u8])>,
     {
         for (expected, mut input) in fixtures {
-            assert_eq!(T::decode(&mut input), expected);
-            if expected.is_ok() {
-                assert_eq!(input, &[]);
+            if let Ok(expected) = &expected {
+                assert_eq!(crate::encode(expected), input, "{expected:?}");
             }
-        }
-    }
 
-    fn check_decode_list<T, IT>(fixtures: IT)
-    where
-        T: Decodable + PartialEq + Debug,
-        IT: IntoIterator<Item = (Result<Vec<T>>, &'static [u8])>,
-    {
-        for (expected, mut input) in fixtures {
-            assert_eq!(Vec::<T>::decode(&mut input), expected);
+            let orig = &*input;
+            assert_eq!(
+                T::decode(&mut input),
+                expected,
+                "input: {}{}",
+                hex::encode(orig),
+                if let Ok(expected) = &expected {
+                    format!("; expected: {}", hex::encode(crate::encode(expected)))
+                } else {
+                    String::new()
+                }
+            );
+
             if expected.is_ok() {
                 assert_eq!(input, &[]);
             }
@@ -230,7 +243,7 @@ mod tests {
 
     #[test]
     fn rlp_strings() {
-        check_decode::<Bytes, _>(vec![
+        check_decode::<Bytes, _>([
             (Ok(hex!("00")[..].to_vec().into()), &hex!("00")[..]),
             (
                 Ok(hex!("6f62636465666768696a6b6c6d")[..].to_vec().into()),
@@ -249,7 +262,7 @@ mod tests {
 
         let mut b = BytesMut::new();
         "test smol str".to_string().encode(&mut b);
-        check_decode::<SmolStr, _>(vec![
+        check_decode::<SmolStr, _>([
             (Ok(SmolStr::new("test smol str")), b.as_ref()),
             (Err(Error::UnexpectedList), &hex!("C0")[..]),
         ])
@@ -257,7 +270,7 @@ mod tests {
 
     #[test]
     fn rlp_fixed_length() {
-        check_decode(vec![
+        check_decode([
             (
                 Ok(hex!("6f62636465666768696a6b6c6d")),
                 &hex!("8D6F62636465666768696A6B6C6D")[..],
@@ -275,7 +288,7 @@ mod tests {
 
     #[test]
     fn rlp_u64() {
-        check_decode(vec![
+        check_decode([
             (Ok(9_u64), &hex!("09")[..]),
             (Ok(0_u64), &hex!("80")[..]),
             (Ok(0x0505_u64), &hex!("820505")[..]),
@@ -299,7 +312,7 @@ mod tests {
 
     #[test]
     fn rlp_vectors() {
-        check_decode_list(vec![
+        check_decode::<Vec<u64>, _>([
             (Ok(vec![]), &hex!("C0")[..]),
             (
                 Ok(vec![0xBBCCB5_u64, 0xFFC0B5_u64]),
@@ -308,34 +321,51 @@ mod tests {
         ])
     }
 
+    #[cfg(feature = "std")]
+    #[test]
+    fn rlp_ip() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+        let localhost4 = Ipv4Addr::new(127, 0, 0, 1);
+        let localhost6 = localhost4.to_ipv6_mapped();
+        let expected4 = &hex!("847F000001")[..];
+        let expected6 = &hex!("9000000000000000000000ffff7f000001")[..];
+        check_decode::<Ipv4Addr, _>([(Ok(localhost4), expected4)]);
+        check_decode::<Ipv6Addr, _>([(Ok(localhost6), expected6)]);
+        check_decode::<IpAddr, _>([
+            (Ok(IpAddr::V4(localhost4)), expected4),
+            (Ok(IpAddr::V6(localhost6)), expected6),
+        ]);
+    }
+
     #[test]
     fn malformed_rlp() {
-        check_decode::<Bytes, _>(vec![
+        check_decode::<Bytes, _>([
             (Err(Error::InputTooShort), &hex!("C1")[..]),
             (Err(Error::InputTooShort), &hex!("D7")[..]),
         ]);
-        check_decode::<[u8; 5], _>(vec![
+        check_decode::<[u8; 5], _>([
             (Err(Error::InputTooShort), &hex!("C1")[..]),
             (Err(Error::InputTooShort), &hex!("D7")[..]),
         ]);
         #[cfg(feature = "std")]
-        check_decode::<std::net::IpAddr, _>(vec![
+        check_decode::<std::net::IpAddr, _>([
             (Err(Error::InputTooShort), &hex!("C1")[..]),
             (Err(Error::InputTooShort), &hex!("D7")[..]),
         ]);
-        check_decode::<Vec<u8>, _>(vec![
+        check_decode::<Vec<u8>, _>([
             (Err(Error::InputTooShort), &hex!("C1")[..]),
             (Err(Error::InputTooShort), &hex!("D7")[..]),
         ]);
-        check_decode::<String, _>(vec![
+        check_decode::<String, _>([
             (Err(Error::InputTooShort), &hex!("C1")[..]),
             (Err(Error::InputTooShort), &hex!("D7")[..]),
         ]);
-        check_decode::<String, _>(vec![
+        check_decode::<String, _>([
             (Err(Error::InputTooShort), &hex!("C1")[..]),
             (Err(Error::InputTooShort), &hex!("D7")[..]),
         ]);
-        check_decode::<u8, _>(vec![(Err(Error::InputTooShort), &hex!("82")[..])]);
-        check_decode::<u64, _>(vec![(Err(Error::InputTooShort), &hex!("82")[..])]);
+        check_decode::<u8, _>([(Err(Error::InputTooShort), &hex!("82")[..])]);
+        check_decode::<u64, _>([(Err(Error::InputTooShort), &hex!("82")[..])]);
     }
 }
