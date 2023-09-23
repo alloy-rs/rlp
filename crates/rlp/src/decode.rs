@@ -199,6 +199,7 @@ pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
     Ok(v)
 }
 
+#[cfg(feature = "std")]
 #[inline]
 fn slice_to_array<const N: usize>(slice: &[u8]) -> Result<[u8; N]> {
     slice.try_into().map_err(|_| Error::UnexpectedLength)
