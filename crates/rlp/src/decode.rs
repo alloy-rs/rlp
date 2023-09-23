@@ -222,7 +222,7 @@ mod tests {
                 assert_eq!(crate::encode(expected), input, "{expected:?}");
             }
 
-            let orig = &*input;
+            let orig = input;
             assert_eq!(
                 T::decode(&mut input),
                 expected,
