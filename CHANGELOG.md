@@ -7,13 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Removed support for `smol_str` ([#8])
+
+[#8]: https://github.com/alloy-rs/rlp/pull/8
+
 ## [0.3.3] - 2023-09-23
 
 ### Fixed
 
-- `Ip{,v4,v6}Addr::decode` ([#6])
+- `Ip{,v4,v6}Addr::decode` ([#7])
 
-[#6]: https://github.com/alloy-rs/rlp/pull/6
+[#7]: https://github.com/alloy-rs/rlp/pull/7
 
 ## [0.3.2] - 2023-07-26
 

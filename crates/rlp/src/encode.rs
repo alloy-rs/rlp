@@ -206,8 +206,6 @@ deref_impl! {
     [] alloc::string::String,
     [] Bytes,
     [] BytesMut,
-    #[cfg(feature = "smol_str")]
-    [] smol_str::SmolStr,
     #[cfg(feature = "arrayvec")]
     [const N: usize] ArrayVec<u8, N>,
     [T: ?Sized + Encodable] &T,
@@ -391,21 +389,6 @@ mod tests {
         assert_eq!(encode("")[..], hex!("80")[..]);
         assert_eq!(encode("{")[..], hex!("7b")[..]);
         assert_eq!(encode("test str")[..], hex!("887465737420737472")[..]);
-    }
-
-    #[cfg(feature = "smol_str")]
-    #[test]
-    fn rlp_smol_str() {
-        use alloc::string::ToString;
-        use smol_str::SmolStr;
-
-        assert_eq!(encode(SmolStr::new(""))[..], hex!("80")[..]);
-        let mut b = BytesMut::new();
-        "test smol str".to_string().encode(&mut b);
-        assert_eq!(&encode(SmolStr::new("test smol str"))[..], b.as_ref());
-        let mut b = BytesMut::new();
-        "abcdefgh".to_string().encode(&mut b);
-        assert_eq!(&encode(SmolStr::new("abcdefgh"))[..], b.as_ref());
     }
 
     #[test]

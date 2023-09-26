@@ -98,14 +98,6 @@ impl<T: Decodable> Decodable for alloc::vec::Vec<T> {
     }
 }
 
-#[cfg(feature = "smol_str")]
-impl Decodable for smol_str::SmolStr {
-    #[inline]
-    fn decode(buf: &mut &[u8]) -> Result<Self> {
-        Header::decode_str(buf).map(Into::into)
-    }
-}
-
 macro_rules! wrap_impl {
     ($($(#[$attr:meta])* [$($gen:tt)*] <$t:ty>::$new:ident($t2:ty)),+ $(,)?) => {$(
         $(#[$attr])*
@@ -250,21 +242,6 @@ mod tests {
                 Ok(hex!("6f62636465666768696a6b6c6d")[..].to_vec().into()),
                 &hex!("8D6F62636465666768696A6B6C6D")[..],
             ),
-            (Err(Error::UnexpectedList), &hex!("C0")[..]),
-        ])
-    }
-
-    #[cfg(feature = "smol_str")]
-    #[test]
-    fn rlp_smol_str() {
-        use crate::Encodable;
-        use alloc::string::ToString;
-        use smol_str::SmolStr;
-
-        let mut b = BytesMut::new();
-        "test smol str".to_string().encode(&mut b);
-        check_decode::<SmolStr, _>([
-            (Ok(SmolStr::new("test smol str")), b.as_ref()),
             (Err(Error::UnexpectedList), &hex!("C0")[..]),
         ])
     }
