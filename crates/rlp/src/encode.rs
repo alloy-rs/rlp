@@ -1,7 +1,10 @@
 use crate::{Header, EMPTY_STRING_CODE};
 use alloc::vec::Vec;
 use bytes::{BufMut, Bytes, BytesMut};
-use core::borrow::Borrow;
+use core::{
+    borrow::Borrow,
+    marker::{PhantomData, PhantomPinned},
+};
 
 #[cfg(feature = "arrayvec")]
 use arrayvec::ArrayVec;
@@ -89,6 +92,26 @@ impl Encodable for [u8] {
         }
         out.put_slice(self);
     }
+}
+
+impl<T> Encodable for PhantomData<T> {
+    #[inline]
+    fn length(&self) -> usize {
+        0
+    }
+
+    #[inline]
+    fn encode(&self, _out: &mut dyn BufMut) {}
+}
+
+impl Encodable for PhantomPinned {
+    #[inline]
+    fn length(&self) -> usize {
+        0
+    }
+
+    #[inline]
+    fn encode(&self, _out: &mut dyn BufMut) {}
 }
 
 impl<const N: usize> Encodable for [u8; N] {

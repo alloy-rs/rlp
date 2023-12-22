@@ -1,5 +1,6 @@
 use crate::{Error, Header, Result};
 use bytes::{Bytes, BytesMut};
+use core::marker::{PhantomData, PhantomPinned};
 
 /// A type that can be decoded from an RLP blob.
 pub trait Decodable: Sized {
@@ -28,6 +29,18 @@ impl<'a> Rlp<'a> {
         } else {
             T::decode(&mut self.payload_view).map(Some)
         }
+    }
+}
+
+impl<T> Decodable for PhantomData<T> {
+    fn decode(_buf: &mut &[u8]) -> Result<Self> {
+        Ok(PhantomData)
+    }
+}
+
+impl Decodable for PhantomPinned {
+    fn decode(_buf: &mut &[u8]) -> Result<Self> {
+        Ok(PhantomPinned)
     }
 }
 
