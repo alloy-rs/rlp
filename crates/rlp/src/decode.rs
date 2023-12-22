@@ -32,7 +32,7 @@ impl<'a> Rlp<'a> {
     }
 }
 
-impl<T> Decodable for PhantomData<T> {
+impl<T: ?Sized> Decodable for PhantomData<T> {
     fn decode(_buf: &mut &[u8]) -> Result<Self> {
         Ok(PhantomData)
     }

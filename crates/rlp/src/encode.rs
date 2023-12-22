@@ -94,7 +94,7 @@ impl Encodable for [u8] {
     }
 }
 
-impl<T> Encodable for PhantomData<T> {
+impl<T: ?Sized> Encodable for PhantomData<T> {
     #[inline]
     fn length(&self) -> usize {
         0
