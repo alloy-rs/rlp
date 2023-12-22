@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2023-12-22
+
+### Added
+
+- Added support for `PhantomData` and `PhantomPinned` ([#11])
+
+[#11]: https://github.com/alloy-rs/rlp/pull/11
+
 ### Removed
 
 - Removed support for `smol_str` ([#8])
