@@ -1,10 +1,12 @@
 use crate::{Header, EMPTY_STRING_CODE};
-use alloc::vec::Vec;
 use bytes::{BufMut, Bytes, BytesMut};
 use core::{
     borrow::Borrow,
     marker::{PhantomData, PhantomPinned},
 };
+
+#[allow(unused_imports)]
+use alloc::vec::Vec;
 
 #[cfg(feature = "arrayvec")]
 use arrayvec::ArrayVec;

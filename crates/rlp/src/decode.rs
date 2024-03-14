@@ -214,9 +214,11 @@ fn slice_to_array<const N: usize>(slice: &[u8]) -> Result<[u8; N]> {
 mod tests {
     use super::*;
     use crate::Encodable;
-    use alloc::{string::String, vec::Vec};
     use core::fmt::Debug;
     use hex_literal::hex;
+
+    #[allow(unused_imports)]
+    use alloc::{string::String, vec::Vec};
 
     fn check_decode<'a, T, IT>(fixtures: IT)
     where
