@@ -34,13 +34,13 @@ impl<'a> Rlp<'a> {
 
 impl<T: ?Sized> Decodable for PhantomData<T> {
     fn decode(_buf: &mut &[u8]) -> Result<Self> {
-        Ok(PhantomData)
+        Ok(Self)
     }
 }
 
 impl Decodable for PhantomPinned {
     fn decode(_buf: &mut &[u8]) -> Result<Self> {
-        Ok(PhantomPinned)
+        Ok(Self)
     }
 }
 

@@ -39,18 +39,18 @@ impl std::error::Error for Error {}
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Overflow => f.write_str("overflow"),
-            Error::LeadingZero => f.write_str("leading zero"),
-            Error::InputTooShort => f.write_str("input too short"),
-            Error::NonCanonicalSingleByte => f.write_str("non-canonical single byte"),
-            Error::NonCanonicalSize => f.write_str("non-canonical size"),
-            Error::UnexpectedLength => f.write_str("unexpected length"),
-            Error::UnexpectedString => f.write_str("unexpected string"),
-            Error::UnexpectedList => f.write_str("unexpected list"),
-            Error::ListLengthMismatch { got, expected } => {
+            Self::Overflow => f.write_str("overflow"),
+            Self::LeadingZero => f.write_str("leading zero"),
+            Self::InputTooShort => f.write_str("input too short"),
+            Self::NonCanonicalSingleByte => f.write_str("non-canonical single byte"),
+            Self::NonCanonicalSize => f.write_str("non-canonical size"),
+            Self::UnexpectedLength => f.write_str("unexpected length"),
+            Self::UnexpectedString => f.write_str("unexpected string"),
+            Self::UnexpectedList => f.write_str("unexpected list"),
+            Self::ListLengthMismatch { got, expected } => {
                 write!(f, "unexpected list length (got {got}, expected {expected})")
             }
-            Error::Custom(err) => f.write_str(err),
+            Self::Custom(err) => f.write_str(err),
         }
     }
 }
