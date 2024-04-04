@@ -28,7 +28,7 @@ impl Header {
                 buf.advance(1);
                 payload_length = (b - EMPTY_STRING_CODE) as usize;
                 if payload_length == 1 && get_next_byte(buf)? < EMPTY_STRING_CODE {
-                    return Err(Error::NonCanonicalSingleByte)
+                    return Err(Error::NonCanonicalSingleByte);
                 }
             }
 
@@ -47,7 +47,7 @@ impl Header {
                 }
 
                 if buf.len() < len_of_len {
-                    return Err(Error::InputTooShort)
+                    return Err(Error::InputTooShort);
                 }
                 // SAFETY: length checked above
                 let len = unsafe { buf.get_unchecked(..len_of_len) };
@@ -57,7 +57,7 @@ impl Header {
                 payload_length =
                     usize::try_from(len).map_err(|_| Error::Custom("Input too big"))?;
                 if payload_length < 56 {
-                    return Err(Error::NonCanonicalSize)
+                    return Err(Error::NonCanonicalSize);
                 }
             }
 
@@ -69,13 +69,10 @@ impl Header {
         }
 
         if buf.remaining() < payload_length {
-            return Err(Error::InputTooShort)
+            return Err(Error::InputTooShort);
         }
 
-        Ok(Self {
-            list,
-            payload_length,
-        })
+        Ok(Self { list, payload_length })
     }
 
     /// Decodes the next payload from the given buffer, advancing it.
@@ -85,17 +82,10 @@ impl Header {
     /// Returns an error if the buffer is too short or the header is invalid.
     #[inline]
     pub fn decode_bytes<'a>(buf: &mut &'a [u8], is_list: bool) -> Result<&'a [u8]> {
-        let Self {
-            list,
-            payload_length,
-        } = Self::decode(buf)?;
+        let Self { list, payload_length } = Self::decode(buf)?;
 
         if list != is_list {
-            return Err(if is_list {
-                Error::UnexpectedString
-            } else {
-                Error::UnexpectedList
-            })
+            return Err(if is_list { Error::UnexpectedString } else { Error::UnexpectedList });
         }
 
         // SAFETY: this is already checked in `decode`
@@ -122,11 +112,7 @@ impl Header {
     #[inline]
     pub fn encode(&self, out: &mut dyn BufMut) {
         if self.payload_length < 56 {
-            let code = if self.list {
-                EMPTY_LIST_CODE
-            } else {
-                EMPTY_STRING_CODE
-            };
+            let code = if self.list { EMPTY_LIST_CODE } else { EMPTY_STRING_CODE };
             out.put_u8(code + self.payload_length as u8);
         } else {
             let len_be;
@@ -148,7 +134,7 @@ impl Header {
 #[inline(always)]
 fn get_next_byte(buf: &[u8]) -> Result<u8> {
     if buf.is_empty() {
-        return Err(Error::InputTooShort)
+        return Err(Error::InputTooShort);
     }
     // SAFETY: length checked above
     Ok(*unsafe { buf.get_unchecked(0) })

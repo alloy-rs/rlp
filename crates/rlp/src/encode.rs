@@ -86,11 +86,7 @@ impl Encodable for [u8] {
     #[inline]
     fn encode(&self, out: &mut dyn BufMut) {
         if self.len() != 1 || self[0] >= EMPTY_STRING_CODE {
-            Header {
-                list: false,
-                payload_length: self.len(),
-            }
-            .encode(out);
+            Header { list: false, payload_length: self.len() }.encode(out);
         }
         out.put_slice(self);
     }
@@ -344,10 +340,7 @@ where
     T: Borrow<E>,
     E: ?Sized + Encodable,
 {
-    let mut h = Header {
-        list: true,
-        payload_length: 0,
-    };
+    let mut h = Header { list: true, payload_length: 0 };
     for t in iter.clone() {
         h.payload_length += t.borrow().length();
     }
@@ -374,10 +367,7 @@ where
     T: Borrow<E>,
     E: ?Sized + Encodable,
 {
-    let mut h = Header {
-        list: true,
-        payload_length: 0,
-    };
+    let mut h = Header { list: true, payload_length: 0 };
     for x in v {
         h.payload_length += x.borrow().length();
     }
@@ -444,10 +434,8 @@ mod tests {
     }
 
     fn u32_fixtures() -> impl IntoIterator<Item = (u32, &'static [u8])> {
-        c(u16_fixtures()).chain(vec![
-            (0xFFCCB5, &hex!("83ffccb5")[..]),
-            (0xFFCCB5DD, &hex!("84ffccb5dd")[..]),
-        ])
+        c(u16_fixtures())
+            .chain(vec![(0xFFCCB5, &hex!("83ffccb5")[..]), (0xFFCCB5DD, &hex!("84ffccb5dd")[..])])
     }
 
     fn u64_fixtures() -> impl IntoIterator<Item = (u64, &'static [u8])> {
@@ -564,10 +552,7 @@ mod tests {
     fn rlp_list() {
         assert_eq!(encoded_list::<u64>(&[]), &hex!("c0")[..]);
         assert_eq!(encoded_list::<u8>(&[0x00u8]), &hex!("c180")[..]);
-        assert_eq!(
-            encoded_list(&[0xFFCCB5_u64, 0xFFC0B5_u64]),
-            &hex!("c883ffccb583ffc0b5")[..]
-        );
+        assert_eq!(encoded_list(&[0xFFCCB5_u64, 0xFFC0B5_u64]), &hex!("c883ffccb583ffc0b5")[..]);
     }
 
     #[test]

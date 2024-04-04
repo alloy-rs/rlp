@@ -150,12 +150,10 @@ mod std_impl {
         fn decode(buf: &mut &[u8]) -> Result<Self> {
             let bytes = Header::decode_bytes(buf, false)?;
             match bytes.len() {
-                4 => Ok(Self::V4(Ipv4Addr::from(
-                    slice_to_array::<4>(bytes).expect("infallible"),
-                ))),
-                16 => Ok(Self::V6(Ipv6Addr::from(
-                    slice_to_array::<16>(bytes).expect("infallible"),
-                ))),
+                4 => Ok(Self::V4(Ipv4Addr::from(slice_to_array::<4>(bytes).expect("infallible")))),
+                16 => {
+                    Ok(Self::V6(Ipv6Addr::from(slice_to_array::<16>(bytes).expect("infallible"))))
+                }
                 _ => Err(Error::UnexpectedLength),
             }
         }
@@ -186,17 +184,17 @@ mod std_impl {
 #[inline]
 pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
     if data.len() > N {
-        return Err(Error::Overflow)
+        return Err(Error::Overflow);
     }
 
     let mut v = [0; N];
 
     if data.is_empty() {
-        return Ok(v)
+        return Ok(v);
     }
 
     if data[0] == 0 {
-        return Err(Error::LeadingZero)
+        return Err(Error::LeadingZero);
     }
 
     // SAFETY: length checked above
@@ -264,18 +262,9 @@ mod tests {
     #[test]
     fn rlp_fixed_length() {
         check_decode([
-            (
-                Ok(hex!("6f62636465666768696a6b6c6d")),
-                &hex!("8D6F62636465666768696A6B6C6D")[..],
-            ),
-            (
-                Err(Error::UnexpectedLength),
-                &hex!("8C6F62636465666768696A6B6C")[..],
-            ),
-            (
-                Err(Error::UnexpectedLength),
-                &hex!("8E6F62636465666768696A6B6C6D6E")[..],
-            ),
+            (Ok(hex!("6f62636465666768696a6b6c6d")), &hex!("8D6F62636465666768696A6B6C6D")[..]),
+            (Err(Error::UnexpectedLength), &hex!("8C6F62636465666768696A6B6C")[..]),
+            (Err(Error::UnexpectedLength), &hex!("8E6F62636465666768696A6B6C6D6E")[..]),
         ])
     }
 
@@ -287,10 +276,7 @@ mod tests {
             (Ok(0x0505_u64), &hex!("820505")[..]),
             (Ok(0xCE05050505_u64), &hex!("85CE05050505")[..]),
             (Err(Error::Overflow), &hex!("8AFFFFFFFFFFFFFFFFFF7C")[..]),
-            (
-                Err(Error::InputTooShort),
-                &hex!("8BFFFFFFFFFFFFFFFFFF7C")[..],
-            ),
+            (Err(Error::InputTooShort), &hex!("8BFFFFFFFFFFFFFFFFFF7C")[..]),
             (Err(Error::UnexpectedList), &hex!("C0")[..]),
             (Err(Error::LeadingZero), &hex!("00")[..]),
             (Err(Error::NonCanonicalSingleByte), &hex!("8105")[..]),
@@ -307,10 +293,7 @@ mod tests {
     fn rlp_vectors() {
         check_decode::<Vec<u64>, _>([
             (Ok(vec![]), &hex!("C0")[..]),
-            (
-                Ok(vec![0xBBCCB5_u64, 0xFFC0B5_u64]),
-                &hex!("C883BBCCB583FFC0B5")[..],
-            ),
+            (Ok(vec![0xBBCCB5_u64, 0xFFC0B5_u64]), &hex!("C883BBCCB583FFC0B5")[..]),
         ])
     }
 
