@@ -288,6 +288,7 @@ mod std_support {
 /// Encode a value.
 ///
 /// Prefer using [`encode_fixed_size`] if a type implements [`MaxEncodedLen`].
+#[inline]
 pub fn encode<T: Encodable>(value: T) -> Vec<u8> {
     let mut out = Vec::with_capacity(value.length());
     value.encode(&mut out);
@@ -296,58 +297,62 @@ pub fn encode<T: Encodable>(value: T) -> Vec<u8> {
 
 /// Encode a type with a known maximum size.
 #[cfg(feature = "arrayvec")]
-pub fn encode_fixed_size<E: MaxEncodedLen<LEN>, const LEN: usize>(v: &E) -> ArrayVec<u8, LEN> {
-    let mut out = [0; LEN];
+#[inline]
+pub fn encode_fixed_size<T: MaxEncodedLen<LEN>, const LEN: usize>(value: &T) -> ArrayVec<u8, LEN> {
+    let mut vec = ArrayVec::<u8, LEN>::new();
 
-    let mut s = &mut out[..];
-    v.encode(&mut s);
-    let written = LEN - s.len();
+    // SAFETY: We're casting uninitalized memory to a slice of bytes to be written into.
+    let mut out = unsafe { core::slice::from_raw_parts_mut(vec.as_mut_ptr(), LEN) };
+    value.encode(&mut out);
+    let written = LEN - out.len();
 
     // SAFETY: `written <= LEN` and all bytes are initialized.
-    let mut vec = ArrayVec::from(out);
     unsafe { vec.set_len(written) };
     vec
 }
 
 /// Calculate the length of a list.
-pub fn list_length<T, E>(list: &[T]) -> usize
+#[inline]
+pub fn list_length<B, T>(list: &[B]) -> usize
 where
-    T: Borrow<E>,
-    E: ?Sized + Encodable,
+    B: Borrow<T>,
+    T: ?Sized + Encodable,
 {
     let payload_length = rlp_list_header(list).payload_length;
     payload_length + length_of_length(payload_length)
 }
 
 /// Encode a list of items.
-pub fn encode_list<T, E>(list: &[T], out: &mut dyn BufMut)
+#[inline]
+pub fn encode_list<B, T>(values: &[B], out: &mut dyn BufMut)
 where
-    T: Borrow<E>,
-    E: ?Sized + Encodable,
+    B: Borrow<T>,
+    T: ?Sized + Encodable,
 {
-    rlp_list_header(list).encode(out);
-    for t in list {
-        t.borrow().encode(out);
+    rlp_list_header(values).encode(out);
+    for value in values {
+        value.borrow().encode(out);
     }
 }
 
 /// Encode all items from an iterator.
 ///
 /// This clones the iterator. Prefer [`encode_list`] if possible.
-pub fn encode_iter<I, T, E>(iter: I, out: &mut dyn BufMut)
+#[inline]
+pub fn encode_iter<I, B, T>(values: I, out: &mut dyn BufMut)
 where
-    I: Iterator<Item = T> + Clone,
-    T: Borrow<E>,
-    E: ?Sized + Encodable,
+    I: Iterator<Item = B> + Clone,
+    B: Borrow<T>,
+    T: ?Sized + Encodable,
 {
     let mut h = Header { list: true, payload_length: 0 };
-    for t in iter.clone() {
+    for t in values.clone() {
         h.payload_length += t.borrow().length();
     }
 
     h.encode(out);
-    for t in iter {
-        t.borrow().encode(out);
+    for value in values {
+        value.borrow().encode(out);
     }
 }
 
@@ -362,14 +367,14 @@ pub const fn length_of_length(payload_length: usize) -> usize {
 }
 
 #[inline]
-fn rlp_list_header<T, E>(v: &[T]) -> Header
+fn rlp_list_header<B, T>(values: &[B]) -> Header
 where
-    T: Borrow<E>,
-    E: ?Sized + Encodable,
+    B: Borrow<T>,
+    T: ?Sized + Encodable,
 {
     let mut h = Header { list: true, payload_length: 0 };
-    for x in v {
-        h.payload_length += x.borrow().length();
+    for value in values {
+        h.payload_length += value.borrow().length();
     }
     h
 }
@@ -457,7 +462,9 @@ mod tests {
     macro_rules! uint_rlp_test {
         ($fixtures:expr) => {
             for (input, output) in $fixtures {
-                assert_eq!(encode(input), output);
+                assert_eq!(encode(input), output, "encode({input})");
+                #[cfg(feature = "arrayvec")]
+                assert_eq!(&encode_fixed_size(&input)[..], output, "encode_fixed_size({input})");
             }
         };
     }
