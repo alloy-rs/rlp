@@ -29,7 +29,7 @@ pub enum Error {
         /// Actual length.
         got: usize,
     },
-    /// Custom Err.
+    /// Custom error.
     Custom(&'static str),
 }
 
