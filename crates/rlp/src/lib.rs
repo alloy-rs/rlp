@@ -33,7 +33,7 @@ pub use encode::{
 };
 
 mod header;
-pub use header::Header;
+pub use header::{Header, PayloadView};
 
 #[doc(no_inline)]
 pub use bytes::{self, Buf, BufMut, Bytes, BytesMut};

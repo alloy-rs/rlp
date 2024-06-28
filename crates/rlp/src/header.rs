@@ -162,7 +162,9 @@ impl Header {
 
 /// Structured representation of an RLP payload.
 pub enum PayloadView<'a> {
+    /// Payload is a byte string.
     String(&'a [u8]),
+    /// Payload is a list of RLP encoded data.
     List(alloc::vec::Vec<&'a [u8]>),
 }
 
