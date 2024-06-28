@@ -205,7 +205,7 @@ mod tests {
         let mut buf = encoded.as_slice();
         assert!(
             matches!(Header::decode_raw(&mut buf), Ok(PayloadView::String(v)) if v == expected),
-            "input: {}, expected list: {:?}",
+            "input: {}, expected string: {:?}",
             input,
             expected
         );
