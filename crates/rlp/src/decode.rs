@@ -126,9 +126,9 @@ macro_rules! wrap_impl {
 wrap_impl! {
     #[cfg(feature = "arrayvec")]
     [const N: usize] <arrayvec::ArrayVec<u8, N>>::from([u8; N]),
-    [T: ?Sized + Decodable] <alloc::boxed::Box<T>>::new(T),
-    [T: ?Sized + Decodable] <alloc::rc::Rc<T>>::new(T),
-    [T: ?Sized + Decodable] <alloc::sync::Arc<T>>::new(T),
+    [T: Decodable] <alloc::boxed::Box<T>>::new(T),
+    [T: Decodable] <alloc::rc::Rc<T>>::new(T),
+    [T: Decodable] <alloc::sync::Arc<T>>::new(T),
 }
 
 impl<T: ?Sized + alloc::borrow::ToOwned> Decodable for alloc::borrow::Cow<'_, T>
