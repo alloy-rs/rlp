@@ -186,7 +186,7 @@ mod tests {
     use crate::Encodable;
     use core::fmt::Debug;
 
-    fn check_decode_list<T: Encodable + Debug>(input: Vec<T>) {
+    fn check_decode_raw_list<T: Encodable + Debug>(input: Vec<T>) {
         let encoded = crate::encode(&input);
         let expected: Vec<_> = input.iter().map(crate::encode).collect();
         let mut buf = encoded.as_slice();
@@ -199,7 +199,7 @@ mod tests {
         assert!(buf.is_empty(), "buffer was not advanced");
     }
 
-    fn check_decode_string(input: &str) {
+    fn check_decode_raw_string(input: &str) {
         let encoded = crate::encode(input);
         let expected = Header::decode_bytes(&mut &encoded[..], false).unwrap();
         let mut buf = encoded.as_slice();
@@ -215,23 +215,23 @@ mod tests {
     #[test]
     fn decode_raw() {
         // empty list
-        check_decode_list(Vec::<u64>::new());
+        check_decode_raw_list(Vec::<u64>::new());
         // list of an empty RLP list
-        check_decode_list(vec![Vec::<u64>::new()]);
+        check_decode_raw_list(vec![Vec::<u64>::new()]);
         // list of an empty RLP string
-        check_decode_list(vec![""]);
+        check_decode_raw_list(vec![""]);
         // list of two RLP strings
-        check_decode_list(vec![0xBBCCB5_u64, 0xFFC0B5_u64]);
+        check_decode_raw_list(vec![0xBBCCB5_u64, 0xFFC0B5_u64]);
         // list of three RLP lists of various lengths
-        check_decode_list(vec![vec![0u64], vec![1u64, 2u64], vec![3u64, 4u64, 5u64]]);
+        check_decode_raw_list(vec![vec![0u64], vec![1u64, 2u64], vec![3u64, 4u64, 5u64]]);
         // list of four empty RLP strings
-        check_decode_list(vec![0u64; 4]);
+        check_decode_raw_list(vec![0u64; 4]);
         // list of all one-byte strings, some will have an RLP header and some won't
-        check_decode_list((0u64..0xFF).collect());
+        check_decode_raw_list((0u64..0xFF).collect());
 
         // strings of various lengths
-        check_decode_string("");
-        check_decode_string(" ");
-        check_decode_string("test1234");
+        check_decode_raw_string("");
+        check_decode_raw_string(" ");
+        check_decode_raw_string("test1234");
     }
 }
