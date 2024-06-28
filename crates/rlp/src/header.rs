@@ -108,6 +108,40 @@ impl Header {
         core::str::from_utf8(bytes).map_err(|_| Error::Custom("invalid string"))
     }
 
+    /// Extracts the next payload from the given buffer, advancing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the buffer is too short, the header is invalid or one of the headers one
+    /// level deeper is invalid.
+    #[inline]
+    pub fn decode_raw<'a>(buf: &mut &'a [u8]) -> Result<PayloadView<'a>> {
+        let Self { list, payload_length } = Self::decode(buf)?;
+        let mut payload = &buf[..payload_length];
+        buf.advance(payload_length);
+
+        if !list {
+            return Ok(PayloadView::String(payload));
+        }
+
+        let mut items = alloc::vec::Vec::new();
+        while !payload.is_empty() {
+            // decode the next header without advancing in the payload
+            let Self { payload_length, .. } = Self::decode(&mut &payload[..])?;
+            // the length of the RLP encoding is the length of the header plus its payload length
+            // if payload length is 1 and the first byte is in [0x00, 0x7F], then there is no header
+            let rlp_length = if payload_length == 1 && payload[0] <= 0x7F {
+                1
+            } else {
+                payload_length + crate::length_of_length(payload_length)
+            };
+            items.push(&payload[..rlp_length]);
+            payload.advance(rlp_length);
+        }
+
+        return Ok(PayloadView::List(items));
+    }
+
     /// Encodes the header into the `out` buffer.
     #[inline]
     pub fn encode(&self, out: &mut dyn BufMut) {
@@ -128,6 +162,12 @@ impl Header {
     pub const fn length(&self) -> usize {
         crate::length_of_length(self.payload_length)
     }
+}
+
+/// Structured representation of an RLP payload.
+pub enum PayloadView<'a> {
+    String(&'a [u8]),
+    List(Vec<&'a [u8]>),
 }
 
 /// Same as `buf.first().ok_or(Error::InputTooShort)`.
