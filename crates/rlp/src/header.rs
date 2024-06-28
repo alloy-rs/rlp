@@ -184,6 +184,7 @@ fn get_next_byte(buf: &[u8]) -> Result<u8> {
 mod tests {
     use super::*;
     use crate::Encodable;
+    use alloc::vec::Vec;
     use core::fmt::Debug;
 
     fn check_decode_raw_list<T: Encodable + Debug>(input: Vec<T>) {
