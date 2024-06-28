@@ -89,11 +89,7 @@ impl Header {
         }
 
         // SAFETY: this is already checked in `decode`
-        if buf.remaining() < payload_length {
-            unsafe { unreachable_unchecked() }
-        }
-        let bytes = unsafe { buf.get_unchecked(..payload_length) };
-        buf.advance(payload_length);
+        let bytes = unsafe { advance_unchecked(buf, payload_length) };
         Ok(bytes)
     }
 
@@ -117,8 +113,8 @@ impl Header {
     #[inline]
     pub fn decode_raw<'a>(buf: &mut &'a [u8]) -> Result<PayloadView<'a>> {
         let Self { list, payload_length } = Self::decode(buf)?;
-        let mut payload = &buf[..payload_length];
-        buf.advance(payload_length);
+        // SAFETY: this is already checked in `decode`
+        let mut payload = unsafe { advance_unchecked(buf, payload_length) };
 
         if !list {
             return Ok(PayloadView::String(payload));
@@ -178,6 +174,17 @@ fn get_next_byte(buf: &[u8]) -> Result<u8> {
     }
     // SAFETY: length checked above
     Ok(*unsafe { buf.get_unchecked(0) })
+}
+
+/// Same as `let (bytes, rest) = buf.split_at(cnt); *buf = rest; bytes`.
+#[inline(always)]
+unsafe fn advance_unchecked<'a>(buf: &mut &'a [u8], cnt: usize) -> &'a [u8] {
+    if buf.remaining() < cnt {
+        unreachable_unchecked()
+    }
+    let bytes = &buf[..cnt];
+    buf.advance(cnt);
+    bytes
 }
 
 #[cfg(test)]
