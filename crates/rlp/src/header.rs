@@ -167,7 +167,7 @@ impl Header {
 /// Structured representation of an RLP payload.
 pub enum PayloadView<'a> {
     String(&'a [u8]),
-    List(Vec<&'a [u8]>),
+    List(alloc::vec::Vec<&'a [u8]>),
 }
 
 /// Same as `buf.first().ok_or(Error::InputTooShort)`.
