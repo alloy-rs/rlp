@@ -179,3 +179,59 @@ fn get_next_byte(buf: &[u8]) -> Result<u8> {
     // SAFETY: length checked above
     Ok(*unsafe { buf.get_unchecked(0) })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Encodable;
+    use core::fmt::Debug;
+
+    fn check_decode_list<T: Encodable + Debug>(input: Vec<T>) {
+        let encoded = crate::encode(&input);
+        let expected: Vec<_> = input.iter().map(crate::encode).collect();
+        let mut buf = encoded.as_slice();
+        assert!(
+            matches!(Header::decode_raw(&mut buf), Ok(PayloadView::List(v)) if v == expected),
+            "input: {:?}, expected list: {:?}",
+            input,
+            expected
+        );
+        assert!(buf.is_empty(), "buffer was not advanced");
+    }
+
+    fn check_decode_string(input: &str) {
+        let encoded = crate::encode(input);
+        let expected = Header::decode_bytes(&mut &encoded[..], false).unwrap();
+        let mut buf = encoded.as_slice();
+        assert!(
+            matches!(Header::decode_raw(&mut buf), Ok(PayloadView::String(v)) if v == expected),
+            "input: {}, expected list: {:?}",
+            input,
+            expected
+        );
+        assert!(buf.is_empty(), "buffer was not advanced");
+    }
+
+    #[test]
+    fn decode_raw() {
+        // empty list
+        check_decode_list(Vec::<u64>::new());
+        // list of an empty RLP list
+        check_decode_list(vec![Vec::<u64>::new()]);
+        // list of an empty RLP string
+        check_decode_list(vec![""]);
+        // list of two RLP strings
+        check_decode_list(vec![0xBBCCB5_u64, 0xFFC0B5_u64]);
+        // list of three RLP lists of various lengths
+        check_decode_list(vec![vec![0u64], vec![1u64, 2u64], vec![3u64, 4u64, 5u64]]);
+        // list of four empty RLP strings
+        check_decode_list(vec![0u64; 4]);
+        // list of all one-byte strings, some will have an RLP header and some won't
+        check_decode_list((0u64..0xFF).collect());
+
+        // strings of various lengths
+        check_decode_string("");
+        check_decode_string(" ");
+        check_decode_string("test1234");
+    }
+}
