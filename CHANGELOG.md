@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.6] - 2024-05-22
+## [0.3.7] - 2024-06-29
+
+### Fixed
+
+- Make `PayloadView` public ([#20])
+
+[#20]: https://github.com/alloy-rs/rlp/pull/20
+
+## [0.3.6] - 2024-06-29
 
 ### Added
 
-- New `decode_raw` static methods to `Header`
+- New `decode_raw` static methods to `Header` ([#18])
+
+[#18]: https://github.com/alloy-rs/rlp/pull/18
 
 ## [0.3.5] - 2024-05-22
 
