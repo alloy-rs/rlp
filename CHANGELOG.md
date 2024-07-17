@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Fix `RlpEncodableWrapper` doc
+- Fix `RlpEncodableWrapper` doc ([#22])
+
+[#22]: https://github.com/alloy-rs/rlp/pull/22
 
 ## [0.3.7] - 2024-06-29
 
