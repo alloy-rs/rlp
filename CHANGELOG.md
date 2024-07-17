@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `decode_full` function
+
 ## [0.3.7] - 2024-06-29
 
 ### Fixed
