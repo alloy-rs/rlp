@@ -229,7 +229,7 @@ fn slice_to_array<const N: usize>(slice: &[u8]) -> Result<[u8; N]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Encodable;
+    use crate::{encode, Encodable};
     use core::fmt::Debug;
     use hex_literal::hex;
 
@@ -361,5 +361,19 @@ mod tests {
         ]);
         check_decode::<u8, _>([(Err(Error::InputTooShort), &hex!("82")[..])]);
         check_decode::<u64, _>([(Err(Error::InputTooShort), &hex!("82")[..])]);
+    }
+
+    #[test]
+    fn rlp_full() {
+        fn check_decode_full<T: Decodable + Encodable + PartialEq + Debug>(input: T) {
+            let encoded = encode(&input);
+            assert_eq!(decode_full::<T>(&encoded), Ok(input));
+            assert_eq!(decode_full::<T>([encoded, vec![0x00]].concat()), Err(Error::TrailingBytes));
+        }
+
+        check_decode_full::<String>("".into());
+        check_decode_full::<String>("test1234".into());
+        check_decode_full::<Vec<u64>>(vec![]);
+        check_decode_full::<Vec<u64>>(vec![0; 4]);
     }
 }
