@@ -176,6 +176,24 @@ mod std_impl {
     }
 }
 
+/// Decodes the entire input, ensuring no trailing bytes remain.
+///
+/// # Errors
+///
+/// Returns an error if the encoding is invalid or if data remains after decoding the RLP item.
+#[inline]
+pub fn decode_full<T: Decodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
+    let mut buf = bytes.as_ref();
+    let out = T::decode(&mut buf)?;
+
+    // check if there are any remaining bytes after decoding
+    if !buf.is_empty() {
+        return Err(Error::TrailingBytes);
+    }
+
+    Ok(out)
+}
+
 /// Left-pads a slice to a statically known size array.
 ///
 /// # Errors
