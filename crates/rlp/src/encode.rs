@@ -419,6 +419,12 @@ mod tests {
         assert_eq!(encode(hex!("ABBA"))[..], hex!("82abba")[..]);
     }
 
+    #[test]
+    fn rlp_bool() {
+        assert_eq!(encode(true), hex!("01"));
+        assert_eq!(encode(false), hex!("80"));
+    }
+
     fn c<T, U: From<T>>(
         it: impl IntoIterator<Item = (T, &'static [u8])>,
     ) -> impl Iterator<Item = (U, &'static [u8])> {

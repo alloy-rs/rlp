@@ -189,6 +189,7 @@ pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
 
     let mut v = [0; N];
 
+    // yes, data may empty, e.g. we decode a bool false value
     if data.is_empty() {
         return Ok(v);
     }
@@ -245,6 +246,17 @@ mod tests {
                 assert_eq!(input, &[]);
             }
         }
+    }
+
+    #[test]
+    fn rlp_bool() {
+        let out = vec![0x80];
+        let val = bool::decode(&mut &out[..]);
+        assert_eq!(Ok(false), val);
+
+        let out = vec![0x01];
+        let val = bool::decode(&mut &out[..]);
+        assert_eq!(Ok(true), val);
     }
 
     #[test]
