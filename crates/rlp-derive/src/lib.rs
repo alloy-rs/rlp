@@ -27,8 +27,8 @@ pub fn encodable(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Derives `Encodable` for the type which encodes the fields as-is, without a
-/// header: `<fields...>`
+/// Derives `Encodable` for the `newtype` which encodes its single field as-is, without a header:
+/// `<field>`
 #[proc_macro_derive(RlpEncodableWrapper, attributes(rlp))]
 pub fn encodable_wrapper(input: TokenStream) -> TokenStream {
     syn::parse(input)
