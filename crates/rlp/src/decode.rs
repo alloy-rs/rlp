@@ -250,11 +250,11 @@ mod tests {
 
     #[test]
     fn rlp_bool() {
-        let out = vec![0x80];
+        let out = [0x80];
         let val = bool::decode(&mut &out[..]);
         assert_eq!(Ok(false), val);
 
-        let out = vec![0x01];
+        let out = [0x01];
         let val = bool::decode(&mut &out[..]);
         assert_eq!(Ok(true), val);
     }
