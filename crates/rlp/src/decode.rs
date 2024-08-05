@@ -188,7 +188,8 @@ pub fn decode_exact<T: Decodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
 
     // check if there are any remaining bytes after decoding
     if !buf.is_empty() {
-        return Err(Error::TrailingBytes);
+        // TODO: introduce a new variant TrailingBytes to better distinguish this error
+        return Err(Error::UnexpectedLength);
     }
 
     Ok(out)
@@ -382,7 +383,7 @@ mod tests {
             assert_eq!(decode_exact::<T>(&encoded), Ok(input));
             assert_eq!(
                 decode_exact::<T>([encoded, vec![0x00]].concat()),
-                Err(Error::TrailingBytes)
+                Err(Error::UnexpectedLength)
             );
         }
 

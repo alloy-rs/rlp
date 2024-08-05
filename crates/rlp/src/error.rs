@@ -12,8 +12,6 @@ pub enum Error {
     LeadingZero,
     /// Overran input while decoding.
     InputTooShort,
-    /// Additional trailing bytes found after decoding.
-    TrailingBytes,
     /// Expected single byte, but got invalid value.
     NonCanonicalSingleByte,
     /// Expected size, but got invalid value.
@@ -44,7 +42,6 @@ impl fmt::Display for Error {
             Self::Overflow => f.write_str("overflow"),
             Self::LeadingZero => f.write_str("leading zero"),
             Self::InputTooShort => f.write_str("input too short"),
-            Self::TrailingBytes => f.write_str("trailing bytes"),
             Self::NonCanonicalSingleByte => f.write_str("non-canonical single byte"),
             Self::NonCanonicalSize => f.write_str("non-canonical size"),
             Self::UnexpectedLength => f.write_str("unexpected length"),
