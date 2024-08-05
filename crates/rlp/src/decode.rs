@@ -176,6 +176,25 @@ mod std_impl {
     }
 }
 
+/// Decodes the entire input, ensuring no trailing bytes remain.
+///
+/// # Errors
+///
+/// Returns an error if the encoding is invalid or if data remains after decoding the RLP item.
+#[inline]
+pub fn decode_exact<T: Decodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
+    let mut buf = bytes.as_ref();
+    let out = T::decode(&mut buf)?;
+
+    // check if there are any remaining bytes after decoding
+    if !buf.is_empty() {
+        // TODO: introduce a new variant TrailingBytes to better distinguish this error
+        return Err(Error::UnexpectedLength);
+    }
+
+    Ok(out)
+}
+
 /// Left-pads a slice to a statically known size array.
 ///
 /// # Errors
@@ -212,7 +231,7 @@ fn slice_to_array<const N: usize>(slice: &[u8]) -> Result<[u8; N]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Encodable;
+    use crate::{encode, Encodable};
     use core::fmt::Debug;
     use hex_literal::hex;
 
@@ -355,5 +374,22 @@ mod tests {
         ]);
         check_decode::<u8, _>([(Err(Error::InputTooShort), &hex!("82")[..])]);
         check_decode::<u64, _>([(Err(Error::InputTooShort), &hex!("82")[..])]);
+    }
+
+    #[test]
+    fn rlp_full() {
+        fn check_decode_exact<T: Decodable + Encodable + PartialEq + Debug>(input: T) {
+            let encoded = encode(&input);
+            assert_eq!(decode_exact::<T>(&encoded), Ok(input));
+            assert_eq!(
+                decode_exact::<T>([encoded, vec![0x00]].concat()),
+                Err(Error::UnexpectedLength)
+            );
+        }
+
+        check_decode_exact::<String>("".into());
+        check_decode_exact::<String>("test1234".into());
+        check_decode_exact::<Vec<u64>>(vec![]);
+        check_decode_exact::<Vec<u64>>(vec![0; 4]);
     }
 }
