@@ -365,15 +365,18 @@ mod tests {
 
     #[test]
     fn rlp_full() {
-        fn check_decode_full<T: Decodable + Encodable + PartialEq + Debug>(input: T) {
+        fn check_decode_exact<T: Decodable + Encodable + PartialEq + Debug>(input: T) {
             let encoded = encode(&input);
-            assert_eq!(decode_full::<T>(&encoded), Ok(input));
-            assert_eq!(decode_full::<T>([encoded, vec![0x00]].concat()), Err(Error::TrailingBytes));
+            assert_eq!(decode_exact::<T>(&encoded), Ok(input));
+            assert_eq!(
+                decode_exact::<T>([encoded, vec![0x00]].concat()),
+                Err(Error::TrailingBytes)
+            );
         }
 
-        check_decode_full::<String>("".into());
-        check_decode_full::<String>("test1234".into());
-        check_decode_full::<Vec<u64>>(vec![]);
-        check_decode_full::<Vec<u64>>(vec![0; 4]);
+        check_decode_exact::<String>("".into());
+        check_decode_exact::<String>("test1234".into());
+        check_decode_exact::<Vec<u64>>(vec![]);
+        check_decode_exact::<Vec<u64>>(vec![0; 4]);
     }
 }
