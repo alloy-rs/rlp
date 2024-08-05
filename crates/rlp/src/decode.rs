@@ -182,7 +182,7 @@ mod std_impl {
 ///
 /// Returns an error if the encoding is invalid or if data remains after decoding the RLP item.
 #[inline]
-pub fn decode_full<T: Decodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
+pub fn decode_exact<T: Decodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
     let mut buf = bytes.as_ref();
     let out = T::decode(&mut buf)?;
 
