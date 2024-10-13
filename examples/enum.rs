@@ -1,3 +1,6 @@
+//! This example demonstrates how to encode and decode an enum using
+//! `alloy_rlp`.
+
 use alloy_rlp::{encode, encode_list, Decodable, Encodable, Error, Header};
 use bytes::BufMut;
 

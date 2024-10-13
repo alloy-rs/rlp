@@ -23,7 +23,7 @@ fn simple_derive() {
 }
 
 #[test]
-fn wrapper() {
+const fn wrapper() {
     #[derive(RlpEncodableWrapper, RlpDecodableWrapper, RlpMaxEncodedLen, PartialEq, Debug)]
     struct Wrapper([u8; 8]);
 
@@ -32,7 +32,7 @@ fn wrapper() {
 }
 
 #[test]
-fn generics() {
+const fn generics() {
     trait LT<'a> {}
 
     #[derive(RlpEncodable, RlpDecodable, RlpMaxEncodedLen)]
@@ -47,7 +47,7 @@ fn generics() {
 }
 
 #[test]
-fn opt() {
+const fn opt() {
     #[derive(RlpEncodable, RlpDecodable)]
     #[rlp(trailing)]
     struct Options<T>(Option<Vec<T>>);

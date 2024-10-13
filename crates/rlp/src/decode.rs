@@ -10,6 +10,7 @@ pub trait Decodable: Sized {
 }
 
 /// An active RLP decoder, with a specific slice of a payload.
+#[derive(Debug)]
 pub struct Rlp<'a> {
     payload_view: &'a [u8],
 }
@@ -34,13 +35,13 @@ impl<'a> Rlp<'a> {
 
 impl<T: ?Sized> Decodable for PhantomData<T> {
     fn decode(_buf: &mut &[u8]) -> Result<Self> {
-        Ok(PhantomData)
+        Ok(Self)
     }
 }
 
 impl Decodable for PhantomPinned {
     fn decode(_buf: &mut &[u8]) -> Result<Self> {
-        Ok(PhantomPinned)
+        Ok(Self)
     }
 }
 
@@ -126,9 +127,9 @@ macro_rules! wrap_impl {
 wrap_impl! {
     #[cfg(feature = "arrayvec")]
     [const N: usize] <arrayvec::ArrayVec<u8, N>>::from([u8; N]),
-    [T: ?Sized + Decodable] <alloc::boxed::Box<T>>::new(T),
-    [T: ?Sized + Decodable] <alloc::rc::Rc<T>>::new(T),
-    [T: ?Sized + Decodable] <alloc::sync::Arc<T>>::new(T),
+    [T: Decodable] <alloc::boxed::Box<T>>::new(T),
+    [T: Decodable] <alloc::rc::Rc<T>>::new(T),
+    [T: Decodable] <alloc::sync::Arc<T>>::new(T),
 }
 
 impl<T: ?Sized + alloc::borrow::ToOwned> Decodable for alloc::borrow::Cow<'_, T>
@@ -234,11 +235,10 @@ mod tests {
                 expected,
                 "input: {}{}",
                 hex::encode(orig),
-                if let Ok(expected) = &expected {
-                    format!("; expected: {}", hex::encode(crate::encode(expected)))
-                } else {
-                    String::new()
-                }
+                expected.as_ref().map_or_else(
+                    |_| String::new(),
+                    |expected| format!("; expected: {}", hex::encode(crate::encode(expected)))
+                )
             );
 
             if expected.is_ok() {

@@ -248,16 +248,16 @@ mod std_support {
         #[inline]
         fn length(&self) -> usize {
             match self {
-                IpAddr::V4(ip) => ip.length(),
-                IpAddr::V6(ip) => ip.length(),
+                Self::V4(ip) => ip.length(),
+                Self::V6(ip) => ip.length(),
             }
         }
 
         #[inline]
         fn encode(&self, out: &mut dyn BufMut) {
             match self {
-                IpAddr::V4(ip) => ip.encode(out),
-                IpAddr::V6(ip) => ip.encode(out),
+                Self::V4(ip) => ip.encode(out),
+                Self::V6(ip) => ip.encode(out),
             }
         }
     }
