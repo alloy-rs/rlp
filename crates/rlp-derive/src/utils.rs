@@ -22,7 +22,7 @@ pub(crate) fn parse_struct<'a>(
 }
 
 pub(crate) fn attributes_include(attrs: &[Attribute], attr_name: &str) -> bool {
-    for attr in attrs.iter() {
+    for attr in attrs {
         if attr.path().is_ident("rlp") {
             if let Meta::List(meta) = &attr.meta {
                 let mut is_attr = false;
@@ -51,12 +51,13 @@ pub(crate) fn is_optional(field: &Field) -> bool {
 }
 
 pub(crate) fn field_ident(index: usize, field: &syn::Field) -> TokenStream {
-    if let Some(ident) = &field.ident {
-        quote! { #ident }
-    } else {
-        let index = syn::Index::from(index);
-        quote! { #index }
-    }
+    field.ident.as_ref().map_or_else(
+        || {
+            let index = syn::Index::from(index);
+            quote! { #index }
+        },
+        |ident| quote! { #ident },
+    )
 }
 
 pub(crate) fn make_generics(generics: &Generics, trait_name: TokenStream) -> Generics {

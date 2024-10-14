@@ -10,6 +10,7 @@ pub trait Decodable: Sized {
 }
 
 /// An active RLP decoder, with a specific slice of a payload.
+#[derive(Debug)]
 pub struct Rlp<'a> {
     payload_view: &'a [u8],
 }
@@ -254,11 +255,10 @@ mod tests {
                 expected,
                 "input: {}{}",
                 hex::encode(orig),
-                if let Ok(expected) = &expected {
-                    format!("; expected: {}", hex::encode(crate::encode(expected)))
-                } else {
-                    String::new()
-                }
+                expected.as_ref().map_or_else(
+                    |_| String::new(),
+                    |expected| format!("; expected: {}", hex::encode(crate::encode(expected)))
+                )
             );
 
             if expected.is_ok() {

@@ -3,18 +3,14 @@
     html_logo_url = "https://raw.githubusercontent.com/alloy-rs/core/main/assets/alloy.jpg",
     html_favicon_url = "https://raw.githubusercontent.com/alloy-rs/core/main/assets/favicon.ico"
 )]
-#![warn(missing_docs, unreachable_pub, rustdoc::all)]
-#![deny(unused_must_use, unused_crate_dependencies)]
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
-
-extern crate proc_macro;
 
 mod de;
 mod en;
 mod utils;
 
-use de::*;
-use en::*;
+use de::{impl_decodable, impl_decodable_wrapper};
+use en::{impl_encodable, impl_encodable_wrapper, impl_max_encoded_len};
 use proc_macro::TokenStream;
 
 /// Derives `Encodable` for the type which encodes the all fields as list:
