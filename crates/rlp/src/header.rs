@@ -135,7 +135,7 @@ impl Header {
             payload.advance(rlp_length);
         }
 
-        return Ok(PayloadView::List(items));
+        Ok(PayloadView::List(items))
     }
 
     /// Encodes the header into the `out` buffer.
@@ -161,6 +161,7 @@ impl Header {
 }
 
 /// Structured representation of an RLP payload.
+#[derive(Debug)]
 pub enum PayloadView<'a> {
     /// Payload is a byte string.
     String(&'a [u8]),
