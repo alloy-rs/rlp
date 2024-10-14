@@ -19,13 +19,13 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         if is_opt {
             if !supports_trailing_opt {
                 let msg = "optional fields are disabled.\nAdd the `#[rlp(trailing)]` attribute to the struct in order to enable optional fields";
-                return Err(Error::new_spanned(field, msg))
+                return Err(Error::new_spanned(field, msg));
             }
             encountered_opt_item = true;
         } else if encountered_opt_item && !attributes_include(&field.attrs, "default") {
             let msg =
                 "all the fields after the first optional field must be either optional or default";
-            return Err(Error::new_spanned(field, msg))
+            return Err(Error::new_spanned(field, msg));
         }
 
         decode_stmts.push(decodable_field(i, field, is_opt));
@@ -76,7 +76,7 @@ pub(crate) fn impl_decodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
 
     if body.fields.iter().count() != 1 {
         let msg = "`RlpEncodableWrapper` is only defined for structs with one field.";
-        return Err(Error::new(ast.ident.span(), msg))
+        return Err(Error::new(ast.ident.span(), msg));
     }
 
     let name = &ast.ident;

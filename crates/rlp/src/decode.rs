@@ -151,12 +151,10 @@ mod std_impl {
         fn decode(buf: &mut &[u8]) -> Result<Self> {
             let bytes = Header::decode_bytes(buf, false)?;
             match bytes.len() {
-                4 => Ok(Self::V4(Ipv4Addr::from(
-                    slice_to_array::<4>(bytes).expect("infallible"),
-                ))),
-                16 => Ok(Self::V6(Ipv6Addr::from(
-                    slice_to_array::<16>(bytes).expect("infallible"),
-                ))),
+                4 => Ok(Self::V4(Ipv4Addr::from(slice_to_array::<4>(bytes).expect("infallible")))),
+                16 => {
+                    Ok(Self::V6(Ipv6Addr::from(slice_to_array::<16>(bytes).expect("infallible"))))
+                }
                 _ => Err(Error::UnexpectedLength),
             }
         }
@@ -179,6 +177,25 @@ mod std_impl {
     }
 }
 
+/// Decodes the entire input, ensuring no trailing bytes remain.
+///
+/// # Errors
+///
+/// Returns an error if the encoding is invalid or if data remains after decoding the RLP item.
+#[inline]
+pub fn decode_exact<T: Decodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
+    let mut buf = bytes.as_ref();
+    let out = T::decode(&mut buf)?;
+
+    // check if there are any remaining bytes after decoding
+    if !buf.is_empty() {
+        // TODO: introduce a new variant TrailingBytes to better distinguish this error
+        return Err(Error::UnexpectedLength);
+    }
+
+    Ok(out)
+}
+
 /// Left-pads a slice to a statically known size array.
 ///
 /// # Errors
@@ -187,17 +204,18 @@ mod std_impl {
 #[inline]
 pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
     if data.len() > N {
-        return Err(Error::Overflow)
+        return Err(Error::Overflow);
     }
 
     let mut v = [0; N];
 
+    // yes, data may empty, e.g. we decode a bool false value
     if data.is_empty() {
-        return Ok(v)
+        return Ok(v);
     }
 
     if data[0] == 0 {
-        return Err(Error::LeadingZero)
+        return Err(Error::LeadingZero);
     }
 
     // SAFETY: length checked above
@@ -214,10 +232,12 @@ fn slice_to_array<const N: usize>(slice: &[u8]) -> Result<[u8; N]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Encodable;
-    use alloc::{string::String, vec::Vec};
+    use crate::{encode, Encodable};
     use core::fmt::Debug;
     use hex_literal::hex;
+
+    #[allow(unused_imports)]
+    use alloc::{string::String, vec::Vec};
 
     fn check_decode<'a, T, IT>(fixtures: IT)
     where
@@ -248,6 +268,17 @@ mod tests {
     }
 
     #[test]
+    fn rlp_bool() {
+        let out = [0x80];
+        let val = bool::decode(&mut &out[..]);
+        assert_eq!(Ok(false), val);
+
+        let out = [0x01];
+        let val = bool::decode(&mut &out[..]);
+        assert_eq!(Ok(true), val);
+    }
+
+    #[test]
     fn rlp_strings() {
         check_decode::<Bytes, _>([
             (Ok(hex!("00")[..].to_vec().into()), &hex!("00")[..]),
@@ -262,18 +293,9 @@ mod tests {
     #[test]
     fn rlp_fixed_length() {
         check_decode([
-            (
-                Ok(hex!("6f62636465666768696a6b6c6d")),
-                &hex!("8D6F62636465666768696A6B6C6D")[..],
-            ),
-            (
-                Err(Error::UnexpectedLength),
-                &hex!("8C6F62636465666768696A6B6C")[..],
-            ),
-            (
-                Err(Error::UnexpectedLength),
-                &hex!("8E6F62636465666768696A6B6C6D6E")[..],
-            ),
+            (Ok(hex!("6f62636465666768696a6b6c6d")), &hex!("8D6F62636465666768696A6B6C6D")[..]),
+            (Err(Error::UnexpectedLength), &hex!("8C6F62636465666768696A6B6C")[..]),
+            (Err(Error::UnexpectedLength), &hex!("8E6F62636465666768696A6B6C6D6E")[..]),
         ])
     }
 
@@ -285,10 +307,7 @@ mod tests {
             (Ok(0x0505_u64), &hex!("820505")[..]),
             (Ok(0xCE05050505_u64), &hex!("85CE05050505")[..]),
             (Err(Error::Overflow), &hex!("8AFFFFFFFFFFFFFFFFFF7C")[..]),
-            (
-                Err(Error::InputTooShort),
-                &hex!("8BFFFFFFFFFFFFFFFFFF7C")[..],
-            ),
+            (Err(Error::InputTooShort), &hex!("8BFFFFFFFFFFFFFFFFFF7C")[..]),
             (Err(Error::UnexpectedList), &hex!("C0")[..]),
             (Err(Error::LeadingZero), &hex!("00")[..]),
             (Err(Error::NonCanonicalSingleByte), &hex!("8105")[..]),
@@ -305,10 +324,7 @@ mod tests {
     fn rlp_vectors() {
         check_decode::<Vec<u64>, _>([
             (Ok(vec![]), &hex!("C0")[..]),
-            (
-                Ok(vec![0xBBCCB5_u64, 0xFFC0B5_u64]),
-                &hex!("C883BBCCB583FFC0B5")[..],
-            ),
+            (Ok(vec![0xBBCCB5_u64, 0xFFC0B5_u64]), &hex!("C883BBCCB583FFC0B5")[..]),
         ])
     }
 
@@ -358,5 +374,22 @@ mod tests {
         ]);
         check_decode::<u8, _>([(Err(Error::InputTooShort), &hex!("82")[..])]);
         check_decode::<u64, _>([(Err(Error::InputTooShort), &hex!("82")[..])]);
+    }
+
+    #[test]
+    fn rlp_full() {
+        fn check_decode_exact<T: Decodable + Encodable + PartialEq + Debug>(input: T) {
+            let encoded = encode(&input);
+            assert_eq!(decode_exact::<T>(&encoded), Ok(input));
+            assert_eq!(
+                decode_exact::<T>([encoded, vec![0x00]].concat()),
+                Err(Error::UnexpectedLength)
+            );
+        }
+
+        check_decode_exact::<String>("".into());
+        check_decode_exact::<String>("test1234".into());
+        check_decode_exact::<Vec<u64>>(vec![]);
+        check_decode_exact::<Vec<u64>>(vec![0; 4]);
     }
 }

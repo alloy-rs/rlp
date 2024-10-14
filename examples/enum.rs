@@ -30,10 +30,7 @@ impl Decodable for FooBar {
         let mut payload = Header::decode_bytes(data, true)?;
         match u8::decode(&mut payload)? {
             0 => Ok(Self::Foo(u64::decode(&mut payload)?)),
-            1 => Ok(Self::Bar(
-                u16::decode(&mut payload)?,
-                u64::decode(&mut payload)?,
-            )),
+            1 => Ok(Self::Bar(u16::decode(&mut payload)?, u64::decode(&mut payload)?)),
             _ => Err(Error::Custom("unknown type")),
         }
     }

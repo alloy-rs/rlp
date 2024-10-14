@@ -27,12 +27,12 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         if is_opt {
             if !supports_trailing_opt {
                 let msg = "optional fields are disabled.\nAdd the `#[rlp(trailing)]` attribute to the struct in order to enable optional fields";
-                return Err(Error::new_spanned(field, msg))
+                return Err(Error::new_spanned(field, msg));
             }
             encountered_opt_item = true;
         } else if encountered_opt_item {
             let msg = "all the fields after the first optional field must be optional";
-            return Err(Error::new_spanned(field, msg))
+            return Err(Error::new_spanned(field, msg));
         }
 
         length_exprs.push(encodable_length(i, field, is_opt, fields.clone()));
@@ -89,7 +89,7 @@ pub(crate) fn impl_encodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
             field_ident(0, field)
         } else {
             let msg = "`RlpEncodableWrapper` is only derivable for structs with one field";
-            return Err(Error::new(name.span(), msg))
+            return Err(Error::new(name.span(), msg));
         }
     };
 

@@ -1,4 +1,5 @@
 #![cfg(feature = "derive")]
+#![allow(dead_code)]
 
 use alloy_rlp::*;
 
@@ -16,10 +17,7 @@ fn simple_derive() {
     assert_eq!(thing, decoded);
 
     // does not panic on short input
-    assert_eq!(
-        Err(Error::InputTooShort),
-        MyThing::decode(&mut [0x8c; 11].as_ref())
-    )
+    assert_eq!(Err(Error::InputTooShort), MyThing::decode(&mut [0x8c; 11].as_ref()))
 }
 
 #[test]

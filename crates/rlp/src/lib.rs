@@ -11,7 +11,7 @@
 extern crate alloc;
 
 mod decode;
-pub use decode::{Decodable, Rlp};
+pub use decode::{decode_exact, Decodable, Rlp};
 
 mod error;
 pub use error::{Error, Result};
@@ -25,7 +25,7 @@ pub use encode::{
 };
 
 mod header;
-pub use header::Header;
+pub use header::{Header, PayloadView};
 
 #[doc(no_inline)]
 pub use bytes::{self, Buf, BufMut, Bytes, BytesMut};
