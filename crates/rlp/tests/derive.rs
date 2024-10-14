@@ -1,3 +1,5 @@
+//! Tests for the derive macros.
+
 #![cfg(feature = "derive")]
 #![allow(dead_code)]
 
