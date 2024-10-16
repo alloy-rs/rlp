@@ -158,6 +158,11 @@ impl Header {
     pub const fn length(&self) -> usize {
         crate::length_of_length(self.payload_length)
     }
+
+    /// Returns the total length of the encoded header and payload.
+    pub const fn length_with_payload(&self) -> usize {
+        self.length() + self.payload_length
+    }
 }
 
 /// Structured representation of an RLP payload.
