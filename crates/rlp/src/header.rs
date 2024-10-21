@@ -186,7 +186,7 @@ fn get_next_byte(buf: &[u8]) -> Result<u8> {
 
 /// Same as `let (bytes, rest) = buf.split_at(cnt); *buf = rest; bytes`.
 #[inline(always)]
-unsafe fn advance_unchecked<'a>(buf: &mut &'a [u8], cnt: usize) -> &'a [u8] {
+pub(crate) unsafe fn advance_unchecked<'a>(buf: &mut &'a [u8], cnt: usize) -> &'a [u8] {
     if buf.remaining() < cnt {
         unreachable_unchecked()
     }

@@ -13,19 +13,36 @@ use arrayvec::ArrayVec;
 
 /// A type that can be encoded via RLP.
 pub trait Encodable {
+    /// Encode the inner fields into the `out` buffer, without a header.
+    ///
+    /// This is a low-level function that should generally not be called
+    /// directly. Use [`encode`] instead.
+    fn encode_fields(&self, out: &mut dyn BufMut);
+
+    /// Returns the length of the encoded fields in bytes.
+    fn encoded_fields_length(&self) -> usize;
+
+    /// Returns `true` if the type is a string.
+    fn is_string(&self) -> bool;
+
+    /// Creates a header for the encoding. For types for which a header is
+    /// unnecessary,
+    fn header(&self) -> Option<Header> {
+        Some(Header { list: !self.is_string(), payload_length: self.encoded_fields_length() })
+    }
+
     /// Encodes the type into the `out` buffer.
-    fn encode(&self, out: &mut dyn BufMut);
+    fn encode(&self, out: &mut dyn BufMut) {
+        self.header().map(|h| h.encode(out));
+        self.encode_fields(out);
+    }
 
     /// Returns the length of the encoding of this type in bytes.
-    ///
-    /// The default implementation computes this by encoding the type.
-    /// When possible, we recommender implementers override this with a
-    /// specialized implementation.
     #[inline]
     fn length(&self) -> usize {
-        let mut out = Vec::new();
-        self.encode(&mut out);
-        out.len()
+        self.header()
+            .map(|h| h.length_with_payload())
+            .unwrap_or_else(|| self.encoded_fields_length())
     }
 }
 
@@ -75,52 +92,123 @@ pub(crate) use to_be_bytes_trimmed;
 
 impl Encodable for [u8] {
     #[inline]
-    fn length(&self) -> usize {
-        let mut len = self.len();
-        if len != 1 || self[0] >= EMPTY_STRING_CODE {
-            len += length_of_length(len);
-        }
-        len
+    fn encode_fields(&self, out: &mut dyn BufMut) {
+        out.put_slice(self);
     }
 
     #[inline]
-    fn encode(&self, out: &mut dyn BufMut) {
-        if self.len() != 1 || self[0] >= EMPTY_STRING_CODE {
-            Header { list: false, payload_length: self.len() }.encode(out);
+    fn encoded_fields_length(&self) -> usize {
+        self.len()
+    }
+
+    #[inline]
+    fn is_string(&self) -> bool {
+        true
+    }
+
+    #[inline]
+    fn header(&self) -> Option<Header> {
+        (self.len() != 1 || self[0] >= EMPTY_STRING_CODE)
+            .then(|| Header { list: false, payload_length: self.encoded_fields_length() })
+    }
+
+    #[inline]
+    fn length(&self) -> usize {
+        const ESC: usize = EMPTY_STRING_CODE as usize;
+        match self.len() {
+            ..ESC => 1,
+            ESC.. => {
+                self.header().expect("encoding rules enforce header presence").length_with_payload()
+            }
         }
-        out.put_slice(self);
     }
 }
 
 impl<T: ?Sized> Encodable for PhantomData<T> {
     #[inline]
-    fn length(&self) -> usize {
+    fn encode_fields(&self, _out: &mut dyn BufMut) {}
+
+    #[inline]
+    fn encoded_fields_length(&self) -> usize {
         0
     }
 
     #[inline]
+    fn is_string(&self) -> bool {
+        true
+    }
+
+    #[inline]
+    fn header(&self) -> Option<Header> {
+        None
+    }
+
+    #[inline]
     fn encode(&self, _out: &mut dyn BufMut) {}
+
+    #[inline]
+    fn length(&self) -> usize {
+        0
+    }
 }
 
 impl Encodable for PhantomPinned {
     #[inline]
-    fn length(&self) -> usize {
+    fn encode_fields(&self, _out: &mut dyn BufMut) {}
+
+    #[inline]
+    fn encoded_fields_length(&self) -> usize {
         0
     }
 
     #[inline]
+    fn is_string(&self) -> bool {
+        true
+    }
+
+    #[inline]
+    fn header(&self) -> Option<Header> {
+        None
+    }
+
+    #[inline]
     fn encode(&self, _out: &mut dyn BufMut) {}
+
+    #[inline]
+    fn length(&self) -> usize {
+        0
+    }
 }
 
 impl<const N: usize> Encodable for [u8; N] {
     #[inline]
+    fn encode_fields(&self, out: &mut dyn BufMut) {
+        self.as_slice().encode_fields(out);
+    }
+
+    #[inline]
+    fn encoded_fields_length(&self) -> usize {
+        self.as_slice().encoded_fields_length()
+    }
+
+    #[inline]
+    fn is_string(&self) -> bool {
+        true
+    }
+
+    #[inline]
+    fn header(&self) -> Option<Header> {
+        self.as_slice().header()
+    }
+
+    #[inline]
     fn length(&self) -> usize {
-        self[..].length()
+        self.as_slice().length()
     }
 
     #[inline]
     fn encode(&self, out: &mut dyn BufMut) {
-        self[..].encode(out);
+        self.as_slice().encode(out);
     }
 }
 
@@ -130,17 +218,57 @@ unsafe impl<const N: usize> MaxEncodedLenAssoc for [u8; N] {
 
 impl Encodable for str {
     #[inline]
-    fn length(&self) -> usize {
-        self.as_bytes().length()
+    fn encode_fields(&self, out: &mut dyn BufMut) {
+        self.as_bytes().encode_fields(out);
+    }
+
+    #[inline]
+    fn encoded_fields_length(&self) -> usize {
+        self.as_bytes().encoded_fields_length()
+    }
+
+    #[inline]
+    fn is_string(&self) -> bool {
+        true
+    }
+
+    #[inline]
+    fn header(&self) -> Option<Header> {
+        self.as_bytes().header()
     }
 
     #[inline]
     fn encode(&self, out: &mut dyn BufMut) {
-        self.as_bytes().encode(out)
+        self.as_bytes().encode(out);
+    }
+
+    #[inline]
+    fn length(&self) -> usize {
+        self.as_bytes().length()
     }
 }
 
 impl Encodable for bool {
+    #[inline]
+    fn encode_fields(&self, out: &mut dyn BufMut) {
+        out.put_u8(if *self { 1 } else { EMPTY_STRING_CODE });
+    }
+
+    #[inline]
+    fn encoded_fields_length(&self) -> usize {
+        1
+    }
+
+    #[inline]
+    fn is_string(&self) -> bool {
+        true
+    }
+
+    #[inline]
+    fn header(&self) -> Option<Header> {
+        None
+    }
+
     #[inline]
     fn length(&self) -> usize {
         // a `bool` is always `< EMPTY_STRING_CODE`
@@ -149,8 +277,7 @@ impl Encodable for bool {
 
     #[inline]
     fn encode(&self, out: &mut dyn BufMut) {
-        // inlined `(*self as u8).encode(out)`
-        out.put_u8(if *self { 1 } else { EMPTY_STRING_CODE });
+        self.encode_fields(out);
     }
 }
 
@@ -159,28 +286,53 @@ impl_max_encoded_len!(bool, <u8 as MaxEncodedLenAssoc>::LEN);
 macro_rules! uint_impl {
     ($($t:ty),+ $(,)?) => {$(
         impl Encodable for $t {
+
             #[inline]
-            fn length(&self) -> usize {
-                let x = *self;
-                if x < EMPTY_STRING_CODE as $t {
-                    1
-                } else {
-                    1 + (<$t>::BITS as usize / 8) - (x.leading_zeros() as usize / 8)
+            fn encode_fields(&self, out: &mut dyn BufMut) {
+                const ESC: $t = EMPTY_STRING_CODE as $t;
+                match self {
+                    0 => out.put_u8(EMPTY_STRING_CODE),
+                    1..ESC => out.put_u8(*self as u8),
+                    ESC.. => {
+                        let be;
+                        let be = to_be_bytes_trimmed!(be, *self);
+                        out.put_slice(be);
+                    }
                 }
             }
 
             #[inline]
-            fn encode(&self, out: &mut dyn BufMut) {
-                let x = *self;
-                if x == 0 {
-                    out.put_u8(EMPTY_STRING_CODE);
-                } else if x < EMPTY_STRING_CODE as $t {
-                    out.put_u8(x as u8);
-                } else {
-                    let be;
-                    let be = to_be_bytes_trimmed!(be, x);
-                    out.put_u8(EMPTY_STRING_CODE + be.len() as u8);
-                    out.put_slice(be);
+            fn encoded_fields_length(&self) -> usize {
+                const ESC: $t = EMPTY_STRING_CODE as $t;
+                match self {
+                    0..ESC => 1,
+                    ESC.. => (<$t>::BITS as usize / 8) - (self.leading_zeros() as usize / 8)
+                }
+            }
+
+
+            #[inline]
+            fn is_string(&self) -> bool {
+                true
+            }
+
+            #[inline]
+            fn header(&self) -> Option<Header> {
+                const ESC: $t = EMPTY_STRING_CODE as $t;
+                match self {
+                    0..ESC => None,
+                    ESC.. => {
+                        Some(Header { list: false, payload_length: self.encoded_fields_length() })
+                    }
+                }
+            }
+
+            #[inline]
+            fn length(&self) -> usize {
+                const ESC: $t = EMPTY_STRING_CODE as $t;
+                match self {
+                    0..ESC => 1,
+                    ESC.. => self.header().expect("header presence enforced by encoding rules").length_with_payload()
                 }
             }
         }
@@ -196,13 +348,22 @@ uint_impl!(u8, u16, u32, u64, usize, u128);
 
 impl<T: Encodable> Encodable for Vec<T> {
     #[inline]
-    fn length(&self) -> usize {
-        list_length(self)
+    fn encode_fields(&self, out: &mut dyn BufMut) {
+        self.iter().for_each(|t| t.encode(out));
+    }
+
+    fn encoded_fields_length(&self) -> usize {
+        self.iter().map(Encodable::length).sum()
+    }
+
+    fn is_string(&self) -> bool {
+        false
     }
 
     #[inline]
     fn encode(&self, out: &mut dyn BufMut) {
-        encode_list(self, out)
+        self.header().expect("lists always have headers").encode(out);
+        self.encode_fields(out);
     }
 }
 
@@ -210,6 +371,27 @@ macro_rules! deref_impl {
     ($($(#[$attr:meta])* [$($gen:tt)*] $t:ty),+ $(,)?) => {$(
         $(#[$attr])*
         impl<$($gen)*> Encodable for $t {
+
+            #[inline]
+            fn encode_fields(&self, out: &mut dyn BufMut) {
+                (**self).encode_fields(out)
+            }
+
+            #[inline]
+            fn encoded_fields_length(&self) -> usize {
+                (**self).encoded_fields_length()
+            }
+
+            #[inline]
+            fn is_string(&self) -> bool {
+                (**self).is_string()
+            }
+
+            #[inline]
+            fn header(&self) -> Option<Header> {
+                (**self).header()
+            }
+
             #[inline]
             fn length(&self) -> usize {
                 (**self).length()
@@ -243,6 +425,34 @@ mod std_support {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     impl Encodable for IpAddr {
+        fn encode_fields(&self, out: &mut dyn BufMut) {
+            match self {
+                Self::V4(ip) => ip.encode_fields(out),
+                Self::V6(ip) => ip.encode_fields(out),
+            }
+        }
+
+        fn encoded_fields_length(&self) -> usize {
+            match self {
+                Self::V4(ip) => ip.encoded_fields_length(),
+                Self::V6(ip) => ip.encoded_fields_length(),
+            }
+        }
+
+        fn is_string(&self) -> bool {
+            match self {
+                Self::V4(ip) => ip.is_string(),
+                Self::V6(ip) => ip.is_string(),
+            }
+        }
+
+        fn header(&self) -> Option<Header> {
+            match self {
+                Self::V4(ip) => ip.header(),
+                Self::V6(ip) => ip.header(),
+            }
+        }
+
         #[inline]
         fn length(&self) -> usize {
             match self {
@@ -262,6 +472,26 @@ mod std_support {
 
     impl Encodable for Ipv4Addr {
         #[inline]
+        fn encode_fields(&self, out: &mut dyn BufMut) {
+            self.octets().encode_fields(out)
+        }
+
+        #[inline]
+        fn encoded_fields_length(&self) -> usize {
+            self.octets().encoded_fields_length()
+        }
+
+        #[inline]
+        fn is_string(&self) -> bool {
+            self.octets().is_string()
+        }
+
+        #[inline]
+        fn header(&self) -> Option<Header> {
+            self.octets().header()
+        }
+
+        #[inline]
         fn length(&self) -> usize {
             self.octets().length()
         }
@@ -273,6 +503,26 @@ mod std_support {
     }
 
     impl Encodable for Ipv6Addr {
+        #[inline]
+        fn encode_fields(&self, out: &mut dyn BufMut) {
+            self.octets().encode_fields(out)
+        }
+
+        #[inline]
+        fn encoded_fields_length(&self) -> usize {
+            self.octets().encoded_fields_length()
+        }
+
+        #[inline]
+        fn is_string(&self) -> bool {
+            self.octets().is_string()
+        }
+
+        #[inline]
+        fn header(&self) -> Option<Header> {
+            self.octets().header()
+        }
+
         #[inline]
         fn length(&self) -> usize {
             self.octets().length()
@@ -468,7 +718,10 @@ mod tests {
     macro_rules! uint_rlp_test {
         ($fixtures:expr) => {
             for (input, output) in $fixtures {
-                assert_eq!(encode(input), output, "encode({input})");
+                let encoded = encode(input);
+                assert_eq!(input.length(), encoded.len(), "length({input})");
+                assert_eq!(encoded, output, "encode({input})");
+
                 #[cfg(feature = "arrayvec")]
                 assert_eq!(&encode_fixed_size(&input)[..], output, "encode_fixed_size({input})");
             }

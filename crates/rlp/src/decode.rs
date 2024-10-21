@@ -1,12 +1,93 @@
-use crate::{Error, Header, Result};
-use bytes::{Bytes, BytesMut};
+use crate::{header::advance_unchecked, Error, Header, Result};
+use bytes::{Buf, Bytes, BytesMut};
 use core::marker::{PhantomData, PhantomPinned};
+
+/// The expected type of an RLP header during deserialization. This is used by
+/// the [`Decodable`] trait to enforce header correctness during decoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Expectation {
+    /// Expect a list.
+    List,
+    /// Expect a bytestring.
+    Bytestring,
+    /// No expectation. The type has no header, or the header type is data-dependent.
+    None,
+}
+
+impl Expectation {
+    /// Checks if the header matches the expectation.
+    pub fn check(&self, header: &Header) -> Result<()> {
+        match self {
+            Self::List => {
+                if !header.list {
+                    return Err(Error::UnexpectedString);
+                }
+            }
+            Self::Bytestring => {
+                if header.list {
+                    return Err(Error::UnexpectedList);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
 
 /// A type that can be decoded from an RLP blob.
 pub trait Decodable: Sized {
-    /// Decodes the blob into the appropriate type. `buf` must be advanced past
-    /// the decoded object.
-    fn decode(buf: &mut &[u8]) -> Result<Self>;
+    /// Returns the expected header type for this type. Used by
+    /// [`Decodable::decode`] to check header correctness during decoding. If
+    /// the RLP type is unknown or data-dependent, or if the data is a
+    /// single-byte type return [`Expectation::None`].
+    fn expected() -> Expectation;
+
+    /// Decode the fields of this type from the blob.
+    ///
+    /// After this function returns the `buf` MUST be empty.
+    fn decode_fields(buf: &mut &[u8]) -> Result<Self>;
+
+    /// Decodes the blob into the appropriate type.
+    fn decode(buf: &mut &[u8]) -> Result<Self> {
+        let header = Header::decode(buf)?;
+        if header.payload_length > buf.len() {
+            return Err(Error::InputTooShort);
+        }
+        Self::expected().check(&header)?;
+        let t = Self::decode_fields(buf)?;
+
+        Ok(t)
+    }
+
+    /// Decode the blob into the appropriate type, ensuring no trailing bytes
+    /// remain.
+    fn decode_exact(buf: &mut &[u8]) -> Result<Self> {
+        let copy = &mut &**buf;
+
+        // Determine what the appropriate region of the header is
+        let header = Header::decode(copy)?;
+        let inner_deser_len = header.length_with_payload();
+
+        // Check that the buffer is exact size
+        if inner_deser_len > buf.len() {
+            return Err(Error::InputTooShort);
+        }
+        if inner_deser_len < buf.len() {
+            return Err(Error::UnexpectedLength);
+        }
+
+        // Deserialize using only the appropriate region of the buffer
+        let inner_deser = &mut &buf[..inner_deser_len];
+        let t = Self::decode(inner_deser)?;
+        if inner_deser.len() != 0 {
+            // decoding failed to consume the buffer
+            return Err(Error::UnexpectedLength);
+        }
+
+        // SAFETY: checked above
+        unsafe { advance_unchecked(buf, inner_deser_len) };
+        Ok(t)
+    }
 }
 
 /// An active RLP decoder, with a specific slice of a payload.
@@ -34,58 +115,178 @@ impl<'a> Rlp<'a> {
 }
 
 impl<T: ?Sized> Decodable for PhantomData<T> {
+    #[inline]
+    fn expected() -> Expectation {
+        Expectation::None
+    }
+
+    #[inline]
+    fn decode_fields(_buf: &mut &[u8]) -> Result<Self> {
+        Ok(Self)
+    }
+
+    #[inline]
     fn decode(_buf: &mut &[u8]) -> Result<Self> {
+        Ok(Self)
+    }
+
+    #[inline]
+    fn decode_exact(_buf: &mut &[u8]) -> Result<Self> {
         Ok(Self)
     }
 }
 
 impl Decodable for PhantomPinned {
+    #[inline]
+    fn expected() -> Expectation {
+        Expectation::None
+    }
+
+    #[inline]
+    fn decode_fields(_buf: &mut &[u8]) -> Result<Self> {
+        Ok(Self)
+    }
+
+    #[inline]
     fn decode(_buf: &mut &[u8]) -> Result<Self> {
+        Ok(Self)
+    }
+
+    #[inline]
+    fn decode_exact(_buf: &mut &[u8]) -> Result<Self> {
         Ok(Self)
     }
 }
 
 impl Decodable for bool {
     #[inline]
-    fn decode(buf: &mut &[u8]) -> Result<Self> {
+    fn expected() -> Expectation {
+        Expectation::None
+    }
+
+    #[inline]
+    fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
         Ok(match u8::decode(buf)? {
             0 => false,
             1 => true,
             _ => return Err(Error::Custom("invalid bool value, must be 0 or 1")),
         })
     }
+
+    #[inline]
+    fn decode(buf: &mut &[u8]) -> Result<Self> {
+        Self::decode_fields(buf)
+    }
+
+    #[inline]
+    fn decode_exact(buf: &mut &[u8]) -> Result<Self> {
+        if buf.len() != 1 {
+            return Err(Error::UnexpectedLength);
+        }
+        Self::decode_fields(buf)
+    }
 }
 
 impl<const N: usize> Decodable for [u8; N] {
     #[inline]
-    fn decode(from: &mut &[u8]) -> Result<Self> {
-        let bytes = Header::decode_bytes(from, false)?;
-        Self::try_from(bytes).map_err(|_| Error::UnexpectedLength)
+    fn expected() -> Expectation {
+        Expectation::Bytestring
+    }
+
+    #[inline]
+    fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
+        let mut arr = [0; N];
+        arr.copy_from_slice(*buf);
+        *buf = &[];
+        Ok(arr)
+    }
+
+    fn decode(buf: &mut &[u8]) -> Result<Self> {
+        let header = Header::decode(buf)?;
+        if header.payload_length != N {
+            return Err(Error::UnexpectedLength);
+        }
+        if buf.len() < N {
+            return Err(Error::InputTooShort);
+        }
+        Self::expected().check(&header)?;
+        let t = Self::decode_fields(buf)?;
+
+        Ok(t)
     }
 }
 
-macro_rules! decode_integer {
+macro_rules! uint_impl {
     ($($t:ty),+ $(,)?) => {$(
         impl Decodable for $t {
             #[inline]
+            fn expected() -> Expectation {
+                Expectation::None
+            }
+
+            #[inline]
+            fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
+                let first = buf.first().copied().ok_or(Error::InputTooShort)?;
+                match first {
+                    0 => return Err(Error::LeadingZero),
+                    1..crate::EMPTY_STRING_CODE => {
+                        buf.advance(1);
+                        return Ok(first as $t)
+                    },
+                    crate::EMPTY_STRING_CODE => {
+                        buf.advance(1);
+                        return Ok(0)
+                    },
+                    _ => {
+                        let bytes = Header::decode_bytes(buf, false)?;
+                        static_left_pad(bytes).map(<$t>::from_be_bytes)
+                    }
+                }
+
+            }
+
+            #[inline]
             fn decode(buf: &mut &[u8]) -> Result<Self> {
-                let bytes = Header::decode_bytes(buf, false)?;
-                static_left_pad(bytes).map(<$t>::from_be_bytes)
+                Self::decode_fields(buf)
+            }
+
+            #[inline]
+            fn decode_exact(buf: &mut &[u8]) -> Result<Self> {
+                let res = Self::decode_fields(buf);
+                if !buf.is_empty() {
+                    return Err(Error::UnexpectedLength);
+                }
+                res
             }
         }
     )+};
 }
 
-decode_integer!(u8, u16, u32, u64, usize, u128);
+uint_impl!(u8, u16, u32, u64, usize, u128);
 
 impl Decodable for Bytes {
     #[inline]
-    fn decode(buf: &mut &[u8]) -> Result<Self> {
-        Header::decode_bytes(buf, false).map(|x| Self::from(x.to_vec()))
+    fn expected() -> Expectation {
+        Expectation::Bytestring
+    }
+
+    #[inline]
+    fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
+        Ok(buf.copy_to_bytes(buf.len()))
     }
 }
 
 impl Decodable for BytesMut {
+    #[inline]
+    fn expected() -> Expectation {
+        Expectation::Bytestring
+    }
+
+    #[inline]
+    fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
+        Ok(buf.copy_to_bytes(buf.len()).into())
+    }
+
     #[inline]
     fn decode(buf: &mut &[u8]) -> Result<Self> {
         Header::decode_bytes(buf, false).map(Self::from)
@@ -94,19 +295,49 @@ impl Decodable for BytesMut {
 
 impl Decodable for alloc::string::String {
     #[inline]
+    fn expected() -> Expectation {
+        Expectation::Bytestring
+    }
+
+    #[inline]
+    fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
+        let res = core::str::from_utf8(buf)
+            .map_err(|_| Error::Custom("invalid utf8 string"))
+            .map(Into::into);
+        *buf = &[];
+        res
+    }
+
     fn decode(buf: &mut &[u8]) -> Result<Self> {
-        Header::decode_str(buf).map(Into::into)
+        let header = Header::decode(buf)?;
+        if header.payload_length == 0 {
+            if buf.is_empty() {
+                return Ok(Self::new());
+            } else {
+                return Err(Error::UnexpectedLength);
+            }
+        }
+        if header.payload_length > buf.len() {
+            return Err(Error::InputTooShort);
+        }
+        Self::expected().check(&header)?;
+        let t = Self::decode_fields(buf)?;
+
+        Ok(t)
     }
 }
 
 impl<T: Decodable> Decodable for alloc::vec::Vec<T> {
     #[inline]
-    fn decode(buf: &mut &[u8]) -> Result<Self> {
-        let mut bytes = Header::decode_bytes(buf, true)?;
+    fn expected() -> Expectation {
+        Expectation::List
+    }
+
+    #[inline]
+    fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
         let mut vec = Self::new();
-        let payload_view = &mut bytes;
-        while !payload_view.is_empty() {
-            vec.push(T::decode(payload_view)?);
+        while !buf.is_empty() {
+            vec.push(T::decode(buf)?);
         }
         Ok(vec)
     }
@@ -116,6 +347,16 @@ macro_rules! wrap_impl {
     ($($(#[$attr:meta])* [$($gen:tt)*] <$t:ty>::$new:ident($t2:ty)),+ $(,)?) => {$(
         $(#[$attr])*
         impl<$($gen)*> Decodable for $t {
+            #[inline]
+            fn expected() -> Expectation {
+                <$t2 as Decodable>::expected()
+            }
+
+            #[inline]
+            fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
+                <$t2 as Decodable>::decode_fields(buf).map(<$t>::$new)
+            }
+
             #[inline]
             fn decode(buf: &mut &[u8]) -> Result<Self> {
                 <$t2 as Decodable>::decode(buf).map(<$t>::$new)
@@ -137,6 +378,16 @@ where
     T::Owned: Decodable,
 {
     #[inline]
+    fn expected() -> Expectation {
+        T::Owned::expected()
+    }
+
+    #[inline]
+    fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
+        T::Owned::decode_fields(buf).map(Self::Owned)
+    }
+
+    #[inline]
     fn decode(buf: &mut &[u8]) -> Result<Self> {
         T::Owned::decode(buf).map(Self::Owned)
     }
@@ -148,31 +399,48 @@ mod std_impl {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     impl Decodable for IpAddr {
-        fn decode(buf: &mut &[u8]) -> Result<Self> {
-            let bytes = Header::decode_bytes(buf, false)?;
-            match bytes.len() {
-                4 => Ok(Self::V4(Ipv4Addr::from(slice_to_array::<4>(bytes).expect("infallible")))),
-                16 => {
-                    Ok(Self::V6(Ipv6Addr::from(slice_to_array::<16>(bytes).expect("infallible"))))
-                }
-                _ => Err(Error::UnexpectedLength),
+        #[inline]
+        fn expected() -> Expectation {
+            Expectation::Bytestring
+        }
+
+        #[inline]
+        fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
+            if buf.len() == 4 {
+                Ipv4Addr::decode_fields(buf).map(Self::V4)
+            } else if buf.len() == 16 {
+                Ipv6Addr::decode_fields(buf).map(Self::V6)
+            } else {
+                Err(Error::UnexpectedLength)
             }
         }
     }
 
     impl Decodable for Ipv4Addr {
         #[inline]
-        fn decode(buf: &mut &[u8]) -> Result<Self> {
-            let bytes = Header::decode_bytes(buf, false)?;
-            slice_to_array::<4>(bytes).map(Self::from)
+        fn expected() -> Expectation {
+            Expectation::Bytestring
+        }
+
+        #[inline]
+        fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
+            let res = slice_to_array::<4>(buf).map(Self::from);
+            buf.advance(4);
+            res
         }
     }
 
     impl Decodable for Ipv6Addr {
         #[inline]
-        fn decode(buf: &mut &[u8]) -> Result<Self> {
-            let bytes = Header::decode_bytes(buf, false)?;
-            slice_to_array::<16>(bytes).map(Self::from)
+        fn expected() -> Expectation {
+            Expectation::Bytestring
+        }
+
+        #[inline]
+        fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
+            let res = slice_to_array::<16>(buf).map(Self::from);
+            buf.advance(16);
+            res
         }
     }
 }
@@ -184,16 +452,7 @@ mod std_impl {
 /// Returns an error if the encoding is invalid or if data remains after decoding the RLP item.
 #[inline]
 pub fn decode_exact<T: Decodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
-    let mut buf = bytes.as_ref();
-    let out = T::decode(&mut buf)?;
-
-    // check if there are any remaining bytes after decoding
-    if !buf.is_empty() {
-        // TODO: introduce a new variant TrailingBytes to better distinguish this error
-        return Err(Error::UnexpectedLength);
-    }
-
-    Ok(out)
+    T::decode_exact(&mut bytes.as_ref())
 }
 
 /// Left-pads a slice to a statically known size array.
@@ -386,6 +645,8 @@ mod tests {
                 Err(Error::UnexpectedLength)
             );
         }
+
+        decode_exact::<String>(vec![0x80]).unwrap();
 
         check_decode_exact::<String>("".into());
         check_decode_exact::<String>("test1234".into());
