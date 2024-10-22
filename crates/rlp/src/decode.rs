@@ -16,7 +16,7 @@ pub enum Expectation {
 
 impl Expectation {
     /// Checks if the header matches the expectation.
-    pub fn check(&self, header: &Header) -> Result<()> {
+    pub const fn check(&self, header: &Header) -> Result<()> {
         match self {
             Self::List => {
                 if !header.list {
@@ -79,7 +79,7 @@ pub trait Decodable: Sized {
         // Deserialize using only the appropriate region of the buffer
         let inner_deser = &mut &buf[..inner_deser_len];
         let t = Self::decode(inner_deser)?;
-        if inner_deser.len() != 0 {
+        if !inner_deser.is_empty() {
             // decoding failed to consume the buffer
             return Err(Error::UnexpectedLength);
         }
@@ -196,7 +196,7 @@ impl<const N: usize> Decodable for [u8; N] {
     #[inline]
     fn decode_fields(buf: &mut &[u8]) -> Result<Self> {
         let mut arr = [0; N];
-        arr.copy_from_slice(*buf);
+        arr.copy_from_slice(buf);
         *buf = &[];
         Ok(arr)
     }

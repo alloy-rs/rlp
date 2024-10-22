@@ -33,7 +33,9 @@ pub trait Encodable {
 
     /// Encodes the type into the `out` buffer.
     fn encode(&self, out: &mut dyn BufMut) {
-        self.header().map(|h| h.encode(out));
+        if let Some(h) = self.header() {
+            h.encode(out);
+        }
         self.encode_fields(out);
     }
 
