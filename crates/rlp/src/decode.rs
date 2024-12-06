@@ -142,9 +142,12 @@ where
     }
 }
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "core-net"))]
 mod std_impl {
     use super::*;
+    #[cfg(all(feature = "core-net", not(feature = "std")))]
+    use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    #[cfg(feature = "std")]
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     impl Decodable for IpAddr {
@@ -174,6 +177,11 @@ mod std_impl {
             let bytes = Header::decode_bytes(buf, false)?;
             slice_to_array::<16>(bytes).map(Self::from)
         }
+    }
+
+    #[inline]
+    fn slice_to_array<const N: usize>(slice: &[u8]) -> Result<[u8; N]> {
+        slice.try_into().map_err(|_| Error::UnexpectedLength)
     }
 }
 
@@ -221,12 +229,6 @@ pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
     // SAFETY: length checked above
     unsafe { v.get_unchecked_mut(N - data.len()..) }.copy_from_slice(data);
     Ok(v)
-}
-
-#[cfg(feature = "std")]
-#[inline]
-fn slice_to_array<const N: usize>(slice: &[u8]) -> Result<[u8; N]> {
-    slice.try_into().map_err(|_| Error::UnexpectedLength)
 }
 
 #[cfg(test)]

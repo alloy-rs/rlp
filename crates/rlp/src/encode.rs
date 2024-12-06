@@ -237,9 +237,12 @@ deref_impl! {
     [T: ?Sized + Encodable] alloc::sync::Arc<T>,
 }
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "core-net"))]
 mod std_support {
     use super::*;
+    #[cfg(all(feature = "core-net", not(feature = "std")))]
+    use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    #[cfg(feature = "std")]
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     impl Encodable for IpAddr {
