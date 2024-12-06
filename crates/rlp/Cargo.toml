@@ -36,6 +36,9 @@ derive = ["dep:alloy-rlp-derive"]
 # Enables `core::net::` implementations always instead of conditionally through `std`.
 # Requires Rust 1.77 or newer.
 core-net = []
+# Enables `core::error::Error` implementations always instead of conditionally through `std`.
+# Requires Rust 1.81 or newer.
+core-error = []
 
 arrayvec = ["dep:arrayvec"]
 
