@@ -33,6 +33,9 @@ hex-literal.workspace = true
 default = ["std"]
 std = ["bytes/std", "arrayvec?/std"]
 derive = ["dep:alloy-rlp-derive"]
+# Enables `core::net::` implementations always instead of conditionally through `std`.
+# Requires Rust 1.77 or newer.
+core-net = []
 
 arrayvec = ["dep:arrayvec"]
 
