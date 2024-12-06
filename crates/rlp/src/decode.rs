@@ -231,7 +231,6 @@ pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
     Ok(v)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
