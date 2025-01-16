@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Improve `decode_raw` performance ([#34])
 
+[#34]: https://github.com/alloy-rs/rlp/pull/34
+
 ## [0.3.8] - 2024-08-05
 
 ### Added
