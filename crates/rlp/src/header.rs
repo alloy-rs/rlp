@@ -106,10 +106,15 @@ impl Header {
 
     /// Extracts the next payload from the given buffer, advancing it.
     ///
+    /// The returned `PayloadView` provides a structured view of the payload, allowing for efficient
+    /// parsing of nested items without unnecessary allocations.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the buffer is too short, the header is invalid or one of the headers one
-    /// level deeper is invalid.
+    /// Returns an error if:
+    /// - The buffer is too short
+    /// - The header is invalid
+    /// - Any nested headers (for list items) are invalid
     #[inline]
     pub fn decode_raw<'a>(buf: &mut &'a [u8]) -> Result<PayloadView<'a>> {
         let Self { list, payload_length } = Self::decode(buf)?;
@@ -122,17 +127,18 @@ impl Header {
 
         let mut items = alloc::vec::Vec::new();
         while !payload.is_empty() {
-            // decode the next header without advancing in the payload
-            let Self { payload_length, .. } = Self::decode(&mut &payload[..])?;
-            // the length of the RLP encoding is the length of the header plus its payload length
-            // if payload length is 1 and the first byte is in [0x00, 0x7F], then there is no header
-            let rlp_length = if payload_length == 1 && payload[0] <= 0x7F {
-                1
-            } else {
-                payload_length + crate::length_of_length(payload_length)
-            };
-            items.push(&payload[..rlp_length]);
-            payload.advance(rlp_length);
+            // store the start of the current item for later slice creation
+            let item_start = payload;
+
+            // decode the header of the next RLP item, advancing the payload
+            let Self { payload_length, .. } = Self::decode(&mut payload)?;
+            // SAFETY: this is already checked in `decode`
+            unsafe { advance_unchecked(&mut payload, payload_length) };
+
+            // calculate the total length of the item (header + payload) by subtracting the
+            // remaining payload length from the initial length
+            let item_length = item_start.len() - payload.len();
+            items.push(&item_start[..item_length]);
         }
 
         Ok(PayloadView::List(items))
