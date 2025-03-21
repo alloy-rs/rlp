@@ -338,6 +338,39 @@ where
     }
 }
 
+// Encoding a list of items that are not the same static size
+#[inline]
+pub fn encode_list_dynamic(values: &[Box<dyn Encodable>], out: &mut dyn BufMut) {
+    let mut payload = Vec::new();
+
+    // Encode each element into a temporary buffer
+    for value in values {
+        value.encode(&mut payload);
+    }
+
+    // Compute list header based on total payload size
+    let list_header = rlp_list_header_dynamic(payload.len());
+
+    // Write header and payload to the output buffer
+    out.put_slice(&list_header);
+    out.put_slice(&payload);
+}
+
+/// Dynamically computes an RLP list header for a given payload size.
+#[inline]
+fn rlp_list_header_dynamic(size: usize) -> Vec<u8> {
+    if size < 56 {
+        // Single-byte header: 0xC0 + size
+        vec![(0xC0 + size as u8)]
+    } else {
+        // Multi-byte header: 0xF7 + length of size in bytes, followed by size bytes
+        let mut header = vec![0xF7 + (size.to_be_bytes().len() as u8)];
+        header.extend_from_slice(&size.to_be_bytes());
+        header
+    }
+}
+
+
 /// Encode all items from an iterator.
 ///
 /// This clones the iterator. Prefer [`encode_list`] if possible.
@@ -405,6 +438,18 @@ mod tests {
         let mut out = BytesMut::new();
         encode_iter(iter, &mut out);
         out
+    }
+
+    #[test]
+    fn rlp_encode_different_types() {
+        let mut out = BytesMut::new();
+        let encodables: Vec<Box<dyn Encodable>> = vec![
+            Box::new(1_u128),
+            Box::new(0_u8),
+            Box::new(true)
+        ];
+        encode_list_dynamic(&encodables, &mut out);
+        assert_eq!(out.as_ref(), hex!("c3018001"));
     }
 
     #[test]
