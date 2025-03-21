@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `encode_list_dynamic` which allows to encode a vector of Encodables irregardless of their size
+
 ### Changed
 
 - Improve `decode_raw` performance ([#34])
