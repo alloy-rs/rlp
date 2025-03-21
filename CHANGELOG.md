@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `encode_list_dynamic` which allows to encode a vector of Encodables irregardless of their size
+- `encode_list_dynamic` which allows to encode a vector of Encodables irregardless of their size ([#36])
 
 ### Changed
 
