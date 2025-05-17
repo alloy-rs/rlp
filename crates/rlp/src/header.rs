@@ -214,9 +214,7 @@ mod tests {
         let mut buf = encoded.as_slice();
         assert!(
             matches!(Header::decode_raw(&mut buf), Ok(PayloadView::List(v)) if v == expected),
-            "input: {:?}, expected list: {:?}",
-            input,
-            expected
+            "input: {input:?}, expected list: {expected:?}",
         );
         assert!(buf.is_empty(), "buffer was not advanced");
     }
@@ -227,9 +225,7 @@ mod tests {
         let mut buf = encoded.as_slice();
         assert!(
             matches!(Header::decode_raw(&mut buf), Ok(PayloadView::String(v)) if v == expected),
-            "input: {}, expected string: {:?}",
-            input,
-            expected
+            "input: {input}, expected string: {expected:?}",
         );
         assert!(buf.is_empty(), "buffer was not advanced");
     }
