@@ -234,6 +234,7 @@ deref_impl! {
     [T: ?Sized + Encodable] alloc::boxed::Box<T>,
     [T: ?Sized + alloc::borrow::ToOwned + Encodable] alloc::borrow::Cow<'_, T>,
     [T: ?Sized + Encodable] alloc::rc::Rc<T>,
+    #[cfg(target_has_atomic = "ptr")]
     [T: ?Sized + Encodable] alloc::sync::Arc<T>,
 }
 
