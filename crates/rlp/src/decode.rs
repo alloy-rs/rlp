@@ -129,6 +129,7 @@ wrap_impl! {
     [const N: usize] <arrayvec::ArrayVec<u8, N>>::from([u8; N]),
     [T: Decodable] <alloc::boxed::Box<T>>::new(T),
     [T: Decodable] <alloc::rc::Rc<T>>::new(T),
+    #[cfg(target_has_atomic = "ptr")]
     [T: Decodable] <alloc::sync::Arc<T>>::new(T),
 }
 
