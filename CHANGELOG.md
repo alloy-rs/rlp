@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [#34]: https://github.com/alloy-rs/rlp/pull/34
 
+- Fix CI build, bumps MSRV to 1.68 ([#42])
+
+[#42]: https://github.com/alloy-rs/rlp/pull/42
+
 ## [0.3.8] - 2024-08-05
 
 ### Added

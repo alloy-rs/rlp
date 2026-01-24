@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust: ["stable", "beta", "nightly", "1.64"] # MSRV
+        rust: ["stable", "beta", "nightly", "1.68"] # MSRV
         flags: ["--no-default-features", "", "--all-features"]
     steps:
       - uses: actions/checkout@v4
