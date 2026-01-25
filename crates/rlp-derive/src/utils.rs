@@ -25,12 +25,14 @@ pub(crate) fn attributes_include(attrs: &[Attribute], attr_name: &str) -> bool {
     for attr in attrs {
         if attr.path().is_ident("rlp") {
             if let Meta::List(meta) = &attr.meta {
-                let mut is_attr = false;
+                let mut found = false;
                 let _ = meta.parse_nested_meta(|meta| {
-                    is_attr = meta.path.is_ident(attr_name);
+                    if meta.path.is_ident(attr_name) {
+                        found = true;
+                    }
                     Ok(())
                 });
-                if is_attr {
+                if found {
                     return true;
                 }
             }
