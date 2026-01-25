@@ -60,3 +60,75 @@ const fn opt() {
         b: Option<T>,
     }
 }
+
+/// Test that multiple attributes can be combined in a single `#[rlp(...)]`.
+/// See <https://github.com/alloy-rs/rlp/issues/9>
+#[test]
+fn multiple_attrs_combined() {
+    /// A type that intentionally does NOT implement `Encodable` or `Decodable`.
+    /// This verifies that `#[rlp(default, skip)]` works for such types.
+    #[derive(PartialEq, Debug, Default)]
+    struct Cache(u64);
+
+    // Test `#[rlp(default, skip)]` order
+    #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
+    struct Foo {
+        pub bar: u64,
+        #[rlp(default, skip)]
+        pub cache: Cache,
+    }
+
+    let foo = Foo { bar: 42, cache: Cache(123) };
+
+    let mut buf = Vec::new();
+    foo.encode(&mut buf);
+
+    let decoded = Foo::decode(&mut buf.as_slice()).unwrap();
+    assert_eq!(decoded.bar, 42);
+    assert_eq!(decoded.cache, Cache::default());
+
+    // Test `#[rlp(skip, default)]` reverse order
+    #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
+    struct Bar {
+        pub baz: u64,
+        #[rlp(skip, default)]
+        pub cache: Cache,
+    }
+
+    let bar = Bar { baz: 99, cache: Cache(456) };
+
+    let mut buf2 = Vec::new();
+    bar.encode(&mut buf2);
+
+    let decoded2 = Bar::decode(&mut buf2.as_slice()).unwrap();
+    assert_eq!(decoded2.baz, 99);
+    assert_eq!(decoded2.cache, Cache::default());
+}
+
+/// Test that `#[rlp(skip)]` alone works.
+#[test]
+fn skip_field() {
+    #[derive(PartialEq, Debug, Default)]
+    struct NotEncodable(u64);
+
+    #[derive(RlpEncodable, PartialEq, Debug)]
+    struct WithSkip {
+        pub value: u64,
+        #[rlp(skip)]
+        pub skipped: NotEncodable,
+    }
+
+    let s = WithSkip { value: 42, skipped: NotEncodable(123) };
+
+    let mut buf = Vec::new();
+    s.encode(&mut buf);
+
+    // Decode as a struct without the skipped field to verify it wasn't encoded
+    #[derive(RlpDecodable, PartialEq, Debug)]
+    struct WithoutSkip {
+        pub value: u64,
+    }
+
+    let decoded = WithoutSkip::decode(&mut buf.as_slice()).unwrap();
+    assert_eq!(decoded.value, 42);
+}
