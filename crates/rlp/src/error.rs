@@ -33,7 +33,7 @@ pub enum Error {
     Custom(&'static str),
 }
 
-#[cfg(all(feature = "core-net", not(feature = "std")))]
+#[cfg(all(feature = "core-error", not(feature = "std")))]
 impl core::error::Error for Error {}
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
