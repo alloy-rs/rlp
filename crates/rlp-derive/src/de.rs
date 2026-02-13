@@ -32,24 +32,24 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
     }
 
     let name = &ast.ident;
-    let generics = make_generics(&ast.generics, quote!(alloy_rlp::Decodable));
+    let generics = make_generics(&ast.generics, quote!(alloy_rlp::RlpDecodable));
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     Ok(quote! {
         const _: () = {
             extern crate alloy_rlp;
 
-            impl #impl_generics alloy_rlp::Decodable for #name #ty_generics #where_clause {
+            impl #impl_generics alloy_rlp::RlpDecodable for #name #ty_generics #where_clause {
                 #[inline]
-                fn decode(b: &mut &[u8]) -> alloy_rlp::Result<Self> {
+                fn rlp_decode(b: &mut &[u8]) -> alloy_rlp::Result<Self> {
                     let alloy_rlp::Header { list, payload_length } = alloy_rlp::Header::decode(b)?;
                     if !list {
-                        return Err(alloy_rlp::Error::UnexpectedString);
+                        return Err(alloy_rlp::ErrorKind::UnexpectedString);
                     }
 
                     let started_len = b.len();
                     if started_len < payload_length {
-                        return Err(alloy_rlp::DecodeError::InputTooShort);
+                        return Err(alloy_rlp::ErrorKind::InputTooShort);
                     }
 
                     let this = Self {
@@ -58,7 +58,7 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
 
                     let consumed = started_len - b.len();
                     if consumed != payload_length {
-                        return Err(alloy_rlp::Error::ListLengthMismatch {
+                        return Err(alloy_rlp::ErrorKind::ListLengthMismatch {
                             expected: payload_length,
                             got: consumed,
                         });
@@ -80,17 +80,17 @@ pub(crate) fn impl_decodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
     }
 
     let name = &ast.ident;
-    let generics = make_generics(&ast.generics, quote!(alloy_rlp::Decodable));
+    let generics = make_generics(&ast.generics, quote!(alloy_rlp::RlpDecodable));
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     Ok(quote! {
         const _: () = {
             extern crate alloy_rlp;
 
-            impl #impl_generics alloy_rlp::Decodable for #name #ty_generics #where_clause {
+            impl #impl_generics alloy_rlp::RlpDecodable for #name #ty_generics #where_clause {
                 #[inline]
-                fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
-                    alloy_rlp::private::Result::map(alloy_rlp::Decodable::decode(buf), Self)
+                fn rlp_decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
+                    alloy_rlp::private::Result::map(alloy_rlp::RlpDecodable::rlp_decode(buf), Self)
                 }
             }
         };
@@ -109,13 +109,13 @@ fn decodable_field(index: usize, field: &syn::Field, is_opt: bool) -> TokenStrea
                     alloy_rlp::Buf::advance(b, 1);
                     None
                 } else {
-                    Some(alloy_rlp::Decodable::decode(b)?)
+                    Some(alloy_rlp::RlpDecodable::rlp_decode(b)?)
                 }
             } else {
                 None
             },
         }
     } else {
-        quote! { #ident: alloy_rlp::Decodable::decode(b)?, }
+        quote! { #ident: alloy_rlp::RlpDecodable::rlp_decode(b)?, }
     }
 }

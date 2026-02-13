@@ -1,5 +1,7 @@
-use crate::{decode::static_left_pad, Error, Result, EMPTY_LIST_CODE, EMPTY_STRING_CODE};
-use bytes::{Buf, BufMut};
+use crate::{
+    decode::static_left_pad, Encoder, ErrorKind, Result, EMPTY_LIST_CODE, EMPTY_STRING_CODE,
+};
+use bytes::Buf;
 use core::hint::unreachable_unchecked;
 
 /// The header of an RLP item.
@@ -28,7 +30,7 @@ impl Header {
                 buf.advance(1);
                 payload_length = (b - EMPTY_STRING_CODE) as usize;
                 if payload_length == 1 && get_next_byte(buf)? < EMPTY_STRING_CODE {
-                    return Err(Error::NonCanonicalSingleByte);
+                    return Err(ErrorKind::NonCanonicalSingleByte);
                 }
             }
 
@@ -47,7 +49,7 @@ impl Header {
                 }
 
                 if buf.len() < len_of_len {
-                    return Err(Error::InputTooShort);
+                    return Err(ErrorKind::InputTooShort);
                 }
                 // SAFETY: length checked above
                 let len = unsafe { buf.get_unchecked(..len_of_len) };
@@ -55,9 +57,9 @@ impl Header {
 
                 let len = u64::from_be_bytes(static_left_pad(len)?);
                 payload_length =
-                    usize::try_from(len).map_err(|_| Error::Custom("Input too big"))?;
+                    usize::try_from(len).map_err(|_| ErrorKind::Custom("Input too big"))?;
                 if payload_length < 56 {
-                    return Err(Error::NonCanonicalSize);
+                    return Err(ErrorKind::NonCanonicalSize);
                 }
             }
 
@@ -69,7 +71,7 @@ impl Header {
         }
 
         if buf.remaining() < payload_length {
-            return Err(Error::InputTooShort);
+            return Err(ErrorKind::InputTooShort);
         }
 
         Ok(Self { list, payload_length })
@@ -85,7 +87,11 @@ impl Header {
         let Self { list, payload_length } = Self::decode(buf)?;
 
         if list != is_list {
-            return Err(if is_list { Error::UnexpectedString } else { Error::UnexpectedList });
+            return Err(if is_list {
+                ErrorKind::UnexpectedString
+            } else {
+                ErrorKind::UnexpectedList
+            });
         }
 
         // SAFETY: this is already checked in `decode`
@@ -101,7 +107,7 @@ impl Header {
     #[inline]
     pub fn decode_str<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
         let bytes = Self::decode_bytes(buf, false)?;
-        core::str::from_utf8(bytes).map_err(|_| Error::Custom("invalid string"))
+        core::str::from_utf8(bytes).map_err(|_| ErrorKind::Custom("invalid string"))
     }
 
     /// Extracts the next payload from the given buffer, advancing it.
@@ -146,7 +152,7 @@ impl Header {
 
     /// Encodes the header into the `out` buffer.
     #[inline]
-    pub fn encode(&self, out: &mut dyn BufMut) {
+    pub fn encode(&self, out: &mut Encoder<'_>) {
         if self.payload_length < 56 {
             let code = if self.list { EMPTY_LIST_CODE } else { EMPTY_STRING_CODE };
             out.put_u8(code + self.payload_length as u8);
@@ -180,11 +186,11 @@ pub enum PayloadView<'a> {
     List(alloc::vec::Vec<&'a [u8]>),
 }
 
-/// Same as `buf.first().ok_or(Error::InputTooShort)`.
+/// Same as `buf.first().ok_or(ErrorKind::InputTooShort)`.
 #[inline(always)]
 fn get_next_byte(buf: &[u8]) -> Result<u8> {
     if buf.is_empty() {
-        return Err(Error::InputTooShort);
+        return Err(ErrorKind::InputTooShort);
     }
     // SAFETY: length checked above
     Ok(*unsafe { buf.get_unchecked(0) })
@@ -204,11 +210,11 @@ unsafe fn advance_unchecked<'a>(buf: &mut &'a [u8], cnt: usize) -> &'a [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Encodable;
+    use crate::RlpEncodable;
     use alloc::vec::Vec;
     use core::fmt::Debug;
 
-    fn check_decode_raw_list<T: Encodable + Debug>(input: Vec<T>) {
+    fn check_decode_raw_list<T: RlpEncodable + Debug>(input: Vec<T>) {
         let encoded = crate::encode(&input);
         let expected: Vec<_> = input.iter().map(crate::encode).collect();
         let mut buf = encoded.as_slice();
