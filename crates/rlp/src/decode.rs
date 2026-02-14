@@ -1,12 +1,12 @@
-use crate::{Error, Header, Result};
+use crate::{ErrorKind, Header, Result};
 use bytes::{Bytes, BytesMut};
 use core::marker::{PhantomData, PhantomPinned};
 
 /// A type that can be decoded from an RLP blob.
-pub trait Decodable: Sized {
+pub trait RlpDecodable: Sized {
     /// Decodes the blob into the appropriate type. `buf` must be advanced past
     /// the decoded object.
-    fn decode(buf: &mut &[u8]) -> Result<Self>;
+    fn rlp_decode(buf: &mut &[u8]) -> Result<Self>;
 }
 
 /// An active RLP decoder, with a specific slice of a payload.
@@ -24,51 +24,51 @@ impl<'a> Rlp<'a> {
 
     /// Decode the next item from the buffer.
     #[inline]
-    pub fn get_next<T: Decodable>(&mut self) -> Result<Option<T>> {
+    pub fn get_next<T: RlpDecodable>(&mut self) -> Result<Option<T>> {
         if self.payload_view.is_empty() {
             Ok(None)
         } else {
-            T::decode(&mut self.payload_view).map(Some)
+            T::rlp_decode(&mut self.payload_view).map(Some)
         }
     }
 }
 
-impl<T: ?Sized> Decodable for PhantomData<T> {
-    fn decode(_buf: &mut &[u8]) -> Result<Self> {
+impl<T: ?Sized> RlpDecodable for PhantomData<T> {
+    fn rlp_decode(_buf: &mut &[u8]) -> Result<Self> {
         Ok(Self)
     }
 }
 
-impl Decodable for PhantomPinned {
-    fn decode(_buf: &mut &[u8]) -> Result<Self> {
+impl RlpDecodable for PhantomPinned {
+    fn rlp_decode(_buf: &mut &[u8]) -> Result<Self> {
         Ok(Self)
     }
 }
 
-impl Decodable for bool {
+impl RlpDecodable for bool {
     #[inline]
-    fn decode(buf: &mut &[u8]) -> Result<Self> {
-        Ok(match u8::decode(buf)? {
+    fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
+        Ok(match u8::rlp_decode(buf)? {
             0 => false,
             1 => true,
-            _ => return Err(Error::Custom("invalid bool value, must be 0 or 1")),
+            _ => return Err(ErrorKind::Custom("invalid bool value, must be 0 or 1")),
         })
     }
 }
 
-impl<const N: usize> Decodable for [u8; N] {
+impl<const N: usize> RlpDecodable for [u8; N] {
     #[inline]
-    fn decode(from: &mut &[u8]) -> Result<Self> {
+    fn rlp_decode(from: &mut &[u8]) -> Result<Self> {
         let bytes = Header::decode_bytes(from, false)?;
-        Self::try_from(bytes).map_err(|_| Error::UnexpectedLength)
+        Self::try_from(bytes).map_err(|_| ErrorKind::UnexpectedLength)
     }
 }
 
 macro_rules! decode_integer {
     ($($t:ty),+ $(,)?) => {$(
-        impl Decodable for $t {
+        impl RlpDecodable for $t {
             #[inline]
-            fn decode(buf: &mut &[u8]) -> Result<Self> {
+            fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
                 let bytes = Header::decode_bytes(buf, false)?;
                 static_left_pad(bytes).map(<$t>::from_be_bytes)
             }
@@ -78,35 +78,35 @@ macro_rules! decode_integer {
 
 decode_integer!(u8, u16, u32, u64, usize, u128);
 
-impl Decodable for Bytes {
+impl RlpDecodable for Bytes {
     #[inline]
-    fn decode(buf: &mut &[u8]) -> Result<Self> {
+    fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
         Header::decode_bytes(buf, false).map(|x| Self::from(x.to_vec()))
     }
 }
 
-impl Decodable for BytesMut {
+impl RlpDecodable for BytesMut {
     #[inline]
-    fn decode(buf: &mut &[u8]) -> Result<Self> {
+    fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
         Header::decode_bytes(buf, false).map(Self::from)
     }
 }
 
-impl Decodable for alloc::string::String {
+impl RlpDecodable for alloc::string::String {
     #[inline]
-    fn decode(buf: &mut &[u8]) -> Result<Self> {
+    fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
         Header::decode_str(buf).map(Into::into)
     }
 }
 
-impl<T: Decodable> Decodable for alloc::vec::Vec<T> {
+impl<T: RlpDecodable> RlpDecodable for alloc::vec::Vec<T> {
     #[inline]
-    fn decode(buf: &mut &[u8]) -> Result<Self> {
+    fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
         let mut bytes = Header::decode_bytes(buf, true)?;
         let mut vec = Self::new();
         let payload_view = &mut bytes;
         while !payload_view.is_empty() {
-            vec.push(T::decode(payload_view)?);
+            vec.push(T::rlp_decode(payload_view)?);
         }
         Ok(vec)
     }
@@ -115,10 +115,10 @@ impl<T: Decodable> Decodable for alloc::vec::Vec<T> {
 macro_rules! wrap_impl {
     ($($(#[$attr:meta])* [$($gen:tt)*] <$t:ty>::$new:ident($t2:ty)),+ $(,)?) => {$(
         $(#[$attr])*
-        impl<$($gen)*> Decodable for $t {
+        impl<$($gen)*> RlpDecodable for $t {
             #[inline]
-            fn decode(buf: &mut &[u8]) -> Result<Self> {
-                <$t2 as Decodable>::decode(buf).map(<$t>::$new)
+            fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
+                <$t2 as RlpDecodable>::rlp_decode(buf).map(<$t>::$new)
             }
         }
     )+};
@@ -127,19 +127,19 @@ macro_rules! wrap_impl {
 wrap_impl! {
     #[cfg(feature = "arrayvec")]
     [const N: usize] <arrayvec::ArrayVec<u8, N>>::from([u8; N]),
-    [T: Decodable] <alloc::boxed::Box<T>>::new(T),
-    [T: Decodable] <alloc::rc::Rc<T>>::new(T),
+    [T: RlpDecodable] <alloc::boxed::Box<T>>::new(T),
+    [T: RlpDecodable] <alloc::rc::Rc<T>>::new(T),
     #[cfg(target_has_atomic = "ptr")]
-    [T: Decodable] <alloc::sync::Arc<T>>::new(T),
+    [T: RlpDecodable] <alloc::sync::Arc<T>>::new(T),
 }
 
-impl<T: ?Sized + alloc::borrow::ToOwned> Decodable for alloc::borrow::Cow<'_, T>
+impl<T: ?Sized + alloc::borrow::ToOwned> RlpDecodable for alloc::borrow::Cow<'_, T>
 where
-    T::Owned: Decodable,
+    T::Owned: RlpDecodable,
 {
     #[inline]
-    fn decode(buf: &mut &[u8]) -> Result<Self> {
-        T::Owned::decode(buf).map(Self::Owned)
+    fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
+        T::Owned::rlp_decode(buf).map(Self::Owned)
     }
 }
 
@@ -151,30 +151,30 @@ mod std_impl {
     #[cfg(feature = "std")]
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-    impl Decodable for IpAddr {
-        fn decode(buf: &mut &[u8]) -> Result<Self> {
+    impl RlpDecodable for IpAddr {
+        fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
             let bytes = Header::decode_bytes(buf, false)?;
             match bytes.len() {
                 4 => Ok(Self::V4(Ipv4Addr::from(slice_to_array::<4>(bytes).expect("infallible")))),
                 16 => {
                     Ok(Self::V6(Ipv6Addr::from(slice_to_array::<16>(bytes).expect("infallible"))))
                 }
-                _ => Err(Error::UnexpectedLength),
+                _ => Err(ErrorKind::UnexpectedLength),
             }
         }
     }
 
-    impl Decodable for Ipv4Addr {
+    impl RlpDecodable for Ipv4Addr {
         #[inline]
-        fn decode(buf: &mut &[u8]) -> Result<Self> {
+        fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
             let bytes = Header::decode_bytes(buf, false)?;
             slice_to_array::<4>(bytes).map(Self::from)
         }
     }
 
-    impl Decodable for Ipv6Addr {
+    impl RlpDecodable for Ipv6Addr {
         #[inline]
-        fn decode(buf: &mut &[u8]) -> Result<Self> {
+        fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
             let bytes = Header::decode_bytes(buf, false)?;
             slice_to_array::<16>(bytes).map(Self::from)
         }
@@ -182,7 +182,7 @@ mod std_impl {
 
     #[inline]
     fn slice_to_array<const N: usize>(slice: &[u8]) -> Result<[u8; N]> {
-        slice.try_into().map_err(|_| Error::UnexpectedLength)
+        slice.try_into().map_err(|_| ErrorKind::UnexpectedLength)
     }
 }
 
@@ -192,14 +192,14 @@ mod std_impl {
 ///
 /// Returns an error if the encoding is invalid or if data remains after decoding the RLP item.
 #[inline]
-pub fn decode_exact<T: Decodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
+pub fn decode_exact<T: RlpDecodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
     let mut buf = bytes.as_ref();
-    let out = T::decode(&mut buf)?;
+    let out = T::rlp_decode(&mut buf)?;
 
     // check if there are any remaining bytes after decoding
     if !buf.is_empty() {
         // TODO: introduce a new variant TrailingBytes to better distinguish this error
-        return Err(Error::UnexpectedLength);
+        return Err(ErrorKind::UnexpectedLength);
     }
 
     Ok(out)
@@ -213,7 +213,7 @@ pub fn decode_exact<T: Decodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
 #[inline]
 pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
     if data.len() > N {
-        return Err(Error::Overflow);
+        return Err(ErrorKind::Overflow);
     }
 
     let mut v = [0; N];
@@ -224,7 +224,7 @@ pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
     }
 
     if data[0] == 0 {
-        return Err(Error::LeadingZero);
+        return Err(ErrorKind::LeadingZero);
     }
 
     // SAFETY: length checked above
@@ -235,7 +235,7 @@ pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{encode, Encodable};
+    use crate::{encode, RlpEncodable};
     use core::fmt::Debug;
     use hex_literal::hex;
 
@@ -244,7 +244,7 @@ mod tests {
 
     fn check_decode<'a, T, IT>(fixtures: IT)
     where
-        T: Encodable + Decodable + PartialEq + Debug,
+        T: RlpEncodable + RlpDecodable + PartialEq + Debug,
         IT: IntoIterator<Item = (Result<T>, &'a [u8])>,
     {
         for (expected, mut input) in fixtures {
@@ -254,7 +254,7 @@ mod tests {
 
             let orig = input;
             assert_eq!(
-                T::decode(&mut input),
+                T::rlp_decode(&mut input),
                 expected,
                 "input: {}{}",
                 hex::encode(orig),
@@ -273,11 +273,11 @@ mod tests {
     #[test]
     fn rlp_bool() {
         let out = [0x80];
-        let val = bool::decode(&mut &out[..]);
+        let val = bool::rlp_decode(&mut &out[..]);
         assert_eq!(Ok(false), val);
 
         let out = [0x01];
-        let val = bool::decode(&mut &out[..]);
+        let val = bool::rlp_decode(&mut &out[..]);
         assert_eq!(Ok(true), val);
     }
 
@@ -289,7 +289,7 @@ mod tests {
                 Ok(hex!("6f62636465666768696a6b6c6d")[..].to_vec().into()),
                 &hex!("8D6F62636465666768696A6B6C6D")[..],
             ),
-            (Err(Error::UnexpectedList), &hex!("C0")[..]),
+            (Err(ErrorKind::UnexpectedList), &hex!("C0")[..]),
         ])
     }
 
@@ -297,8 +297,8 @@ mod tests {
     fn rlp_fixed_length() {
         check_decode([
             (Ok(hex!("6f62636465666768696a6b6c6d")), &hex!("8D6F62636465666768696A6B6C6D")[..]),
-            (Err(Error::UnexpectedLength), &hex!("8C6F62636465666768696A6B6C")[..]),
-            (Err(Error::UnexpectedLength), &hex!("8E6F62636465666768696A6B6C6D6E")[..]),
+            (Err(ErrorKind::UnexpectedLength), &hex!("8C6F62636465666768696A6B6C")[..]),
+            (Err(ErrorKind::UnexpectedLength), &hex!("8E6F62636465666768696A6B6C6D6E")[..]),
         ])
     }
 
@@ -309,15 +309,15 @@ mod tests {
             (Ok(0_u64), &hex!("80")[..]),
             (Ok(0x0505_u64), &hex!("820505")[..]),
             (Ok(0xCE05050505_u64), &hex!("85CE05050505")[..]),
-            (Err(Error::Overflow), &hex!("8AFFFFFFFFFFFFFFFFFF7C")[..]),
-            (Err(Error::InputTooShort), &hex!("8BFFFFFFFFFFFFFFFFFF7C")[..]),
-            (Err(Error::UnexpectedList), &hex!("C0")[..]),
-            (Err(Error::LeadingZero), &hex!("00")[..]),
-            (Err(Error::NonCanonicalSingleByte), &hex!("8105")[..]),
-            (Err(Error::LeadingZero), &hex!("8200F4")[..]),
-            (Err(Error::NonCanonicalSize), &hex!("B8020004")[..]),
+            (Err(ErrorKind::Overflow), &hex!("8AFFFFFFFFFFFFFFFFFF7C")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("8BFFFFFFFFFFFFFFFFFF7C")[..]),
+            (Err(ErrorKind::UnexpectedList), &hex!("C0")[..]),
+            (Err(ErrorKind::LeadingZero), &hex!("00")[..]),
+            (Err(ErrorKind::NonCanonicalSingleByte), &hex!("8105")[..]),
+            (Err(ErrorKind::LeadingZero), &hex!("8200F4")[..]),
+            (Err(ErrorKind::NonCanonicalSize), &hex!("B8020004")[..]),
             (
-                Err(Error::Overflow),
+                Err(ErrorKind::Overflow),
                 &hex!("A101000000000000000000000000000000000000008B000000000000000000000000")[..],
             ),
         ])
@@ -351,42 +351,42 @@ mod tests {
     #[test]
     fn malformed_rlp() {
         check_decode::<Bytes, _>([
-            (Err(Error::InputTooShort), &hex!("C1")[..]),
-            (Err(Error::InputTooShort), &hex!("D7")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("C1")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("D7")[..]),
         ]);
         check_decode::<[u8; 5], _>([
-            (Err(Error::InputTooShort), &hex!("C1")[..]),
-            (Err(Error::InputTooShort), &hex!("D7")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("C1")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("D7")[..]),
         ]);
         #[cfg(feature = "std")]
         check_decode::<std::net::IpAddr, _>([
-            (Err(Error::InputTooShort), &hex!("C1")[..]),
-            (Err(Error::InputTooShort), &hex!("D7")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("C1")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("D7")[..]),
         ]);
         check_decode::<Vec<u8>, _>([
-            (Err(Error::InputTooShort), &hex!("C1")[..]),
-            (Err(Error::InputTooShort), &hex!("D7")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("C1")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("D7")[..]),
         ]);
         check_decode::<String, _>([
-            (Err(Error::InputTooShort), &hex!("C1")[..]),
-            (Err(Error::InputTooShort), &hex!("D7")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("C1")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("D7")[..]),
         ]);
         check_decode::<String, _>([
-            (Err(Error::InputTooShort), &hex!("C1")[..]),
-            (Err(Error::InputTooShort), &hex!("D7")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("C1")[..]),
+            (Err(ErrorKind::InputTooShort), &hex!("D7")[..]),
         ]);
-        check_decode::<u8, _>([(Err(Error::InputTooShort), &hex!("82")[..])]);
-        check_decode::<u64, _>([(Err(Error::InputTooShort), &hex!("82")[..])]);
+        check_decode::<u8, _>([(Err(ErrorKind::InputTooShort), &hex!("82")[..])]);
+        check_decode::<u64, _>([(Err(ErrorKind::InputTooShort), &hex!("82")[..])]);
     }
 
     #[test]
     fn rlp_full() {
-        fn check_decode_exact<T: Decodable + Encodable + PartialEq + Debug>(input: T) {
+        fn check_decode_exact<T: RlpDecodable + RlpEncodable + PartialEq + Debug>(input: T) {
             let encoded = encode(&input);
             assert_eq!(decode_exact::<T>(&encoded), Ok(input));
             assert_eq!(
                 decode_exact::<T>([encoded, vec![0x00]].concat()),
-                Err(Error::UnexpectedLength)
+                Err(ErrorKind::UnexpectedLength)
             );
         }
 

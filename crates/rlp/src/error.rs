@@ -1,11 +1,12 @@
 use core::fmt;
 
 /// RLP result type.
-pub type Result<T, E = Error> = core::result::Result<T, E>;
+pub type Result<T, E = ErrorKind> = core::result::Result<T, E>;
 
+// TODO: wrap in an `Error` struct with `bytepos` field once `Decoder` is introduced
 /// RLP error type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Error {
+pub enum ErrorKind {
     /// Numeric Overflow.
     Overflow,
     /// Leading zero disallowed.
@@ -34,11 +35,11 @@ pub enum Error {
 }
 
 #[cfg(all(feature = "core-error", not(feature = "std")))]
-impl core::error::Error for Error {}
+impl core::error::Error for ErrorKind {}
 #[cfg(feature = "std")]
-impl std::error::Error for Error {}
+impl std::error::Error for ErrorKind {}
 
-impl fmt::Display for Error {
+impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Overflow => f.write_str("overflow"),
