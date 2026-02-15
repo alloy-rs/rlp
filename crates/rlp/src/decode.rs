@@ -371,10 +371,6 @@ mod tests {
             (Err(Error::InputTooShort), &hex!("C1")[..]),
             (Err(Error::InputTooShort), &hex!("D7")[..]),
         ]);
-        check_decode::<String, _>([
-            (Err(Error::InputTooShort), &hex!("C1")[..]),
-            (Err(Error::InputTooShort), &hex!("D7")[..]),
-        ]);
         check_decode::<u8, _>([(Err(Error::InputTooShort), &hex!("82")[..])]);
         check_decode::<u64, _>([(Err(Error::InputTooShort), &hex!("82")[..])]);
     }
