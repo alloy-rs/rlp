@@ -50,7 +50,7 @@ pub trait RlpEncodable {
     /// Returns the length of the encoding of this type in bytes.
     ///
     /// The default implementation computes this by encoding the type.
-    /// When possible, we recommender implementers override this with a
+    /// When possible, we recommend implementers override this with a
     /// specialized implementation.
     #[inline]
     fn rlp_len(&self) -> usize {
