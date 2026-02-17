@@ -40,22 +40,22 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
     }
 
     let name = &ast.ident;
-    let generics = make_generics(&ast.generics, quote!(alloy_rlp::Encodable));
+    let generics = make_generics(&ast.generics, quote!(alloy_rlp::RlpEncodable));
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     Ok(quote! {
         const _: () = {
             extern crate alloy_rlp;
 
-            impl #impl_generics alloy_rlp::Encodable for #name #ty_generics #where_clause {
+            impl #impl_generics alloy_rlp::RlpEncodable for #name #ty_generics #where_clause {
                 #[inline]
-                fn length(&self) -> usize {
+                fn rlp_len(&self) -> usize {
                     let payload_length = self._alloy_rlp_payload_length();
                     payload_length + alloy_rlp::length_of_length(payload_length)
                 }
 
                 #[inline]
-                fn encode(&self, out: &mut dyn alloy_rlp::BufMut) {
+                fn rlp_encode(&self, out: &mut alloy_rlp::Encoder<'_>) {
                     alloy_rlp::Header {
                         list: true,
                         payload_length: self._alloy_rlp_payload_length(),
@@ -80,7 +80,7 @@ pub(crate) fn impl_encodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
     let body = parse_struct(ast, "RlpEncodableWrapper")?;
 
     let name = &ast.ident;
-    let generics = make_generics(&ast.generics, quote!(alloy_rlp::Encodable));
+    let generics = make_generics(&ast.generics, quote!(alloy_rlp::RlpEncodable));
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let ident = {
@@ -97,15 +97,15 @@ pub(crate) fn impl_encodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
         const _: () = {
             extern crate alloy_rlp;
 
-            impl #impl_generics alloy_rlp::Encodable for #name #ty_generics #where_clause {
+            impl #impl_generics alloy_rlp::RlpEncodable for #name #ty_generics #where_clause {
                 #[inline]
-                fn length(&self) -> usize {
-                    alloy_rlp::Encodable::length(&self.#ident)
+                fn rlp_len(&self) -> usize {
+                    alloy_rlp::RlpEncodable::rlp_len(&self.#ident)
                 }
 
                 #[inline]
-                fn encode(&self, out: &mut dyn alloy_rlp::BufMut) {
-                    alloy_rlp::Encodable::encode(&self.#ident, out)
+                fn rlp_encode(&self, out: &mut alloy_rlp::Encoder<'_>) {
+                    alloy_rlp::RlpEncodable::rlp_encode(&self.#ident, out)
                 }
             }
         };
@@ -174,9 +174,9 @@ fn encodable_length<'a>(
             quote! { 0 }
         };
 
-        quote! { self.#ident.as_ref().map(|val| alloy_rlp::Encodable::length(val)).unwrap_or(#default) }
+        quote! { self.#ident.as_ref().map(|val| alloy_rlp::RlpEncodable::rlp_len(val)).unwrap_or(#default) }
     } else {
-        quote! { alloy_rlp::Encodable::length(&self.#ident) }
+        quote! { alloy_rlp::RlpEncodable::rlp_len(&self.#ident) }
     }
 }
 
@@ -191,7 +191,7 @@ fn encodable_field<'a>(
     if is_opt {
         let if_some_encode = quote! {
             if let Some(val) = self.#ident.as_ref() {
-                alloy_rlp::Encodable::encode(val, out)
+                alloy_rlp::RlpEncodable::rlp_encode(val, out)
             }
         };
 
@@ -207,7 +207,7 @@ fn encodable_field<'a>(
             quote! { #if_some_encode }
         }
     } else {
-        quote! { alloy_rlp::Encodable::encode(&self.#ident, out); }
+        quote! { alloy_rlp::RlpEncodable::rlp_encode(&self.#ident, out); }
     }
 }
 

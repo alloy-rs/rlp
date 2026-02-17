@@ -11,13 +11,13 @@ found [at ethereum.org][ref].
 We strongly recommend deriving RLP traits via the `RlpEncodable` and
 `RlpDecodable` derive macros.
 
-Trait methods can then be accessed via the `Encodable` and `Decodable` traits.
+Trait methods can then be accessed via the `RlpEncodable` and `RlpDecodable` traits.
 
 ## Example
 
 ```rust
 # #[cfg(feature = "derive")] {
-use alloy_rlp::{RlpEncodable, RlpDecodable, Decodable, Encodable};
+use alloy_rlp::{RlpEncodable, RlpDecodable, Encoder};
 
 #[derive(Debug, RlpEncodable, RlpDecodable, PartialEq)]
 pub struct MyStruct {
@@ -31,8 +31,8 @@ let my_struct = MyStruct {
 };
 
 let mut buffer = Vec::<u8>::new();
-let encoded = my_struct.encode(&mut buffer);
-let decoded = MyStruct::decode(&mut buffer.as_slice()).unwrap();
+my_struct.rlp_encode(&mut Encoder::new(&mut buffer));
+let decoded = MyStruct::rlp_decode(&mut buffer.as_slice()).unwrap();
 assert_eq!(my_struct, decoded);
 # }
 ```

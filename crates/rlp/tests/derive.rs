@@ -14,12 +14,12 @@ fn simple_derive() {
 
     // roundtrip fidelity
     let mut buf = Vec::new();
-    thing.encode(&mut buf);
-    let decoded = MyThing::decode(&mut buf.as_slice()).unwrap();
+    thing.rlp_encode(&mut Encoder::new(&mut buf));
+    let decoded = MyThing::rlp_decode(&mut buf.as_slice()).unwrap();
     assert_eq!(thing, decoded);
 
     // does not panic on short input
-    assert_eq!(Err(Error::InputTooShort), MyThing::decode(&mut [0x8c; 11].as_ref()))
+    assert_eq!(Err(ErrorKind::InputTooShort), MyThing::rlp_decode(&mut [0x8c; 11].as_ref()))
 }
 
 #[test]
@@ -65,7 +65,7 @@ const fn opt() {
 /// See <https://github.com/alloy-rs/rlp/issues/9>
 #[test]
 fn multiple_attrs_combined() {
-    /// A type that intentionally does NOT implement `Encodable` or `Decodable`.
+    /// A type that intentionally does NOT implement `RlpEncodable` or `RlpDecodable`.
     /// This verifies that `#[rlp(default, skip)]` works for such types.
     #[derive(PartialEq, Debug, Default)]
     struct Cache(u64);
@@ -81,9 +81,9 @@ fn multiple_attrs_combined() {
     let foo = Foo { bar: 42, cache: Cache(123) };
 
     let mut buf = Vec::new();
-    foo.encode(&mut buf);
+    foo.rlp_encode(&mut Encoder::new(&mut buf));
 
-    let decoded = Foo::decode(&mut buf.as_slice()).unwrap();
+    let decoded = Foo::rlp_decode(&mut buf.as_slice()).unwrap();
     assert_eq!(decoded.bar, 42);
     assert_eq!(decoded.cache, Cache::default());
 
@@ -98,9 +98,9 @@ fn multiple_attrs_combined() {
     let bar = Bar { baz: 99, cache: Cache(456) };
 
     let mut buf2 = Vec::new();
-    bar.encode(&mut buf2);
+    bar.rlp_encode(&mut Encoder::new(&mut buf2));
 
-    let decoded2 = Bar::decode(&mut buf2.as_slice()).unwrap();
+    let decoded2 = Bar::rlp_decode(&mut buf2.as_slice()).unwrap();
     assert_eq!(decoded2.baz, 99);
     assert_eq!(decoded2.cache, Cache::default());
 }
@@ -121,7 +121,7 @@ fn skip_field() {
     let s = WithSkip { value: 42, skipped: NotEncodable(123) };
 
     let mut buf = Vec::new();
-    s.encode(&mut buf);
+    s.rlp_encode(&mut Encoder::new(&mut buf));
 
     // Decode as a struct without the skipped field to verify it wasn't encoded
     #[derive(RlpDecodable, PartialEq, Debug)]
@@ -129,6 +129,6 @@ fn skip_field() {
         pub value: u64,
     }
 
-    let decoded = WithoutSkip::decode(&mut buf.as_slice()).unwrap();
+    let decoded = WithoutSkip::rlp_decode(&mut buf.as_slice()).unwrap();
     assert_eq!(decoded.value, 42);
 }
