@@ -9,16 +9,30 @@ mod de;
 mod en;
 mod utils;
 
-use de::{impl_decodable, impl_decodable_wrapper};
-use en::{impl_encodable, impl_encodable_wrapper, impl_max_encoded_len};
+use de::{impl_decodable, impl_decodable_tagged, impl_decodable_wrapper};
+use en::{impl_encodable, impl_encodable_tagged, impl_encodable_wrapper, impl_max_encoded_len};
 use proc_macro::TokenStream;
+use utils::attributes_include;
 
 /// Derives `RlpEncodable` for the type which encodes the all fields as list:
 /// `<rlp-header, fields...>`
 #[proc_macro_derive(RlpEncodable, attributes(rlp))]
 pub fn encodable(input: TokenStream) -> TokenStream {
     syn::parse(input)
-        .and_then(|ast| impl_encodable(&ast))
+        .and_then(|ast: syn::DeriveInput| {
+            if matches!(ast.data, syn::Data::Enum(_)) {
+                if attributes_include(&ast.attrs, "tagged") {
+                    impl_encodable_tagged(&ast)
+                } else {
+                    Err(syn::Error::new_spanned(
+                        &ast,
+                        "enums require `#[rlp(tagged)]` to derive RlpEncodable",
+                    ))
+                }
+            } else {
+                impl_encodable(&ast)
+            }
+        })
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
@@ -49,7 +63,20 @@ pub fn max_encoded_len(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(RlpDecodable, attributes(rlp))]
 pub fn decodable(input: TokenStream) -> TokenStream {
     syn::parse(input)
-        .and_then(|ast| impl_decodable(&ast))
+        .and_then(|ast: syn::DeriveInput| {
+            if matches!(ast.data, syn::Data::Enum(_)) {
+                if attributes_include(&ast.attrs, "tagged") {
+                    impl_decodable_tagged(&ast)
+                } else {
+                    Err(syn::Error::new_spanned(
+                        &ast,
+                        "enums require `#[rlp(tagged)]` to derive RlpDecodable",
+                    ))
+                }
+            } else {
+                impl_decodable(&ast)
+            }
+        })
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }

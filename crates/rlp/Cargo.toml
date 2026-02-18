@@ -45,3 +45,8 @@ arrayvec = ["dep:arrayvec"]
 [[example]]
 name = "enum"
 path = "../../examples/enum.rs"
+
+[[example]]
+name = "enum_derive"
+path = "../../examples/enum_derive.rs"
+required-features = ["derive"]

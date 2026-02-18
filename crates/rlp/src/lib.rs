@@ -11,10 +11,11 @@
 extern crate alloc;
 
 mod decode;
-pub use decode::{decode_exact, Rlp, RlpDecodable};
+#[allow(deprecated)]
+pub use decode::{decode_exact, Decoder, Rlp, RlpDecodable};
 
 mod error;
-pub use error::{ErrorKind, Result};
+pub use error::{Error, ErrorKind, Result};
 
 mod encode;
 #[cfg(feature = "arrayvec")]
@@ -44,7 +45,7 @@ pub const EMPTY_LIST_CODE: u8 = 0xC0;
 
 // Not public API.
 #[doc(hidden)]
-#[deprecated(since = "0.3.0", note = "use `ErrorKind` instead")]
+#[deprecated(since = "0.3.0", note = "use `Error` or `ErrorKind` instead")]
 pub type DecodeError = ErrorKind;
 
 #[doc(hidden)]
