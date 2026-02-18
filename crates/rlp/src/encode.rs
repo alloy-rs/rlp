@@ -47,6 +47,14 @@ pub trait RlpEncodable {
     /// Encodes the type into the `out` buffer.
     fn rlp_encode(&self, out: &mut Encoder<'_>);
 
+    /// Encodes the type into the `out` buffer without a header.
+    ///
+    /// This is used for `#[rlp(flatten)]` where the header is handled externally.
+    /// The default implementation delegates to [`rlp_encode`](RlpEncodable::rlp_encode).
+    fn rlp_encode_raw(&self, out: &mut Encoder<'_>) {
+        self.rlp_encode(out)
+    }
+
     /// Returns the length of the encoding of this type in bytes.
     ///
     /// The default implementation computes this by encoding the type.
@@ -56,6 +64,18 @@ pub trait RlpEncodable {
     fn rlp_len(&self) -> usize {
         let mut out = Vec::new();
         self.rlp_encode(&mut Encoder::new(&mut out));
+        out.len()
+    }
+
+    /// Returns the length of the raw (headerless) encoding of this type in bytes.
+    ///
+    /// The default implementation computes this by encoding the type raw.
+    /// When possible, we recommend implementers override this with a
+    /// specialized implementation.
+    #[inline]
+    fn rlp_len_raw(&self) -> usize {
+        let mut out = Vec::new();
+        self.rlp_encode_raw(&mut Encoder::new(&mut out));
         out.len()
     }
 }
@@ -268,6 +288,42 @@ deref_impl! {
     #[cfg(target_has_atomic = "ptr")]
     [T: ?Sized + RlpEncodable] alloc::sync::Arc<T>,
 }
+
+macro_rules! tuple_impl {
+    ($($ty:ident),+) => {
+        impl<$($ty: RlpEncodable),+> RlpEncodable for ($($ty,)+) {
+            #[inline]
+            fn rlp_len(&self) -> usize {
+                #[allow(non_snake_case)]
+                let ($($ty,)+) = self;
+                let payload_length = 0 $(+ $ty.rlp_len())+;
+                payload_length + length_of_length(payload_length)
+            }
+
+            #[inline]
+            fn rlp_encode(&self, out: &mut Encoder<'_>) {
+                #[allow(non_snake_case)]
+                let ($($ty,)+) = self;
+                let payload_length = 0 $(+ $ty.rlp_len())+;
+                Header { list: true, payload_length }.encode(out);
+                $($ty.rlp_encode(out);)+
+            }
+        }
+    };
+}
+
+tuple_impl!(A);
+tuple_impl!(A, B);
+tuple_impl!(A, B, C);
+tuple_impl!(A, B, C, D);
+tuple_impl!(A, B, C, D, E);
+tuple_impl!(A, B, C, D, E, F);
+tuple_impl!(A, B, C, D, E, F, G);
+tuple_impl!(A, B, C, D, E, F, G, H);
+tuple_impl!(A, B, C, D, E, F, G, H, I);
+tuple_impl!(A, B, C, D, E, F, G, H, I, J);
+tuple_impl!(A, B, C, D, E, F, G, H, I, J, K);
+tuple_impl!(A, B, C, D, E, F, G, H, I, J, K, L);
 
 #[cfg(any(feature = "std", feature = "core-net"))]
 mod std_support {
@@ -652,5 +708,36 @@ mod tests {
             65536u32 => [1, 0, 0],
             65536u64 => [1, 0, 0],
         }
+    }
+
+    #[test]
+    fn rlp_encode_raw_default() {
+        // Default rlp_encode_raw delegates to rlp_encode
+        let mut buf1 = Vec::new();
+        42u64.rlp_encode(&mut Encoder::new(&mut buf1));
+        let mut buf2 = Vec::new();
+        42u64.rlp_encode_raw(&mut Encoder::new(&mut buf2));
+        assert_eq!(buf1, buf2);
+    }
+
+    #[test]
+    fn rlp_tuples() {
+        // A single-element tuple should encode the same as a 1-element list
+        let t1 = (42u64,);
+        let encoded = encode(t1);
+        assert_eq!(encoded, encoded_list(&[42u64]));
+
+        // A two-element tuple
+        let t2 = (1u64, 2u64);
+        let encoded = encode(t2);
+        assert_eq!(encoded, encoded_list(&[1u64, 2u64]));
+    }
+
+    #[test]
+    fn rlp_len_raw_default() {
+        // Default rlp_len_raw delegates to rlp_encode_raw which delegates to rlp_encode
+        assert_eq!(42u64.rlp_len(), 42u64.rlp_len_raw());
+        assert_eq!(0u64.rlp_len(), 0u64.rlp_len_raw());
+        assert_eq!(0x0505u16.rlp_len(), 0x0505u16.rlp_len_raw());
     }
 }

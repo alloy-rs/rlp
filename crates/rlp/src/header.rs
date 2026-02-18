@@ -1,5 +1,6 @@
 use crate::{
-    decode::static_left_pad, Encoder, ErrorKind, Result, EMPTY_LIST_CODE, EMPTY_STRING_CODE,
+    decode::static_left_pad, Encoder, Error, ErrorKind, Result, EMPTY_LIST_CODE,
+    EMPTY_STRING_CODE,
 };
 use bytes::Buf;
 use core::hint::unreachable_unchecked;
@@ -30,7 +31,7 @@ impl Header {
                 buf.advance(1);
                 payload_length = (b - EMPTY_STRING_CODE) as usize;
                 if payload_length == 1 && get_next_byte(buf)? < EMPTY_STRING_CODE {
-                    return Err(ErrorKind::NonCanonicalSingleByte);
+                    return Err(ErrorKind::NonCanonicalSingleByte.into());
                 }
             }
 
@@ -49,17 +50,17 @@ impl Header {
                 }
 
                 if buf.len() < len_of_len {
-                    return Err(ErrorKind::InputTooShort);
+                    return Err(ErrorKind::InputTooShort.into());
                 }
                 // SAFETY: length checked above
                 let len = unsafe { buf.get_unchecked(..len_of_len) };
                 buf.advance(len_of_len);
 
                 let len = u64::from_be_bytes(static_left_pad(len)?);
-                payload_length =
-                    usize::try_from(len).map_err(|_| ErrorKind::Custom("Input too big"))?;
+                payload_length = usize::try_from(len)
+                    .map_err(|_| Error::new(ErrorKind::Custom("Input too big")))?;
                 if payload_length < 56 {
-                    return Err(ErrorKind::NonCanonicalSize);
+                    return Err(ErrorKind::NonCanonicalSize.into());
                 }
             }
 
@@ -71,7 +72,7 @@ impl Header {
         }
 
         if buf.remaining() < payload_length {
-            return Err(ErrorKind::InputTooShort);
+            return Err(ErrorKind::InputTooShort.into());
         }
 
         Ok(Self { list, payload_length })
@@ -88,9 +89,9 @@ impl Header {
 
         if list != is_list {
             return Err(if is_list {
-                ErrorKind::UnexpectedString
+                ErrorKind::UnexpectedString.into()
             } else {
-                ErrorKind::UnexpectedList
+                ErrorKind::UnexpectedList.into()
             });
         }
 
@@ -107,7 +108,8 @@ impl Header {
     #[inline]
     pub fn decode_str<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
         let bytes = Self::decode_bytes(buf, false)?;
-        core::str::from_utf8(bytes).map_err(|_| ErrorKind::Custom("invalid string"))
+        core::str::from_utf8(bytes)
+            .map_err(|_| Error::new(ErrorKind::Custom("invalid string")))
     }
 
     /// Extracts the next payload from the given buffer, advancing it.
@@ -190,7 +192,7 @@ pub enum PayloadView<'a> {
 #[inline(always)]
 fn get_next_byte(buf: &[u8]) -> Result<u8> {
     if buf.is_empty() {
-        return Err(ErrorKind::InputTooShort);
+        return Err(ErrorKind::InputTooShort.into());
     }
     // SAFETY: length checked above
     Ok(*unsafe { buf.get_unchecked(0) })

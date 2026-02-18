@@ -1,8 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-    parse_quote, Attribute, DataStruct, Error, Field, GenericParam, Generics, Meta, Result, Type,
-    TypePath,
+    parse_quote, Attribute, DataEnum, DataStruct, Error, Expr, Field, GenericParam, Generics, Meta,
+    Result, Type, TypePath,
 };
 
 pub(crate) const EMPTY_STRING_CODE: u8 = 0x80;
@@ -60,6 +60,42 @@ pub(crate) fn field_ident(index: usize, field: &syn::Field) -> TokenStream {
         },
         |ident| quote! { #ident },
     )
+}
+
+pub(crate) fn parse_enum<'a>(
+    ast: &'a syn::DeriveInput,
+    derive_attr: &str,
+) -> Result<&'a DataEnum> {
+    if let syn::Data::Enum(e) = &ast.data {
+        Ok(e)
+    } else {
+        Err(Error::new_spanned(
+            ast,
+            format!("#[derive({derive_attr})] with #[rlp(tagged)] is only defined for enums."),
+        ))
+    }
+}
+
+pub(crate) fn get_tag_value(attrs: &[Attribute]) -> Option<Expr> {
+    for attr in attrs {
+        if attr.path().is_ident("rlp") {
+            if let Meta::List(meta) = &attr.meta {
+                let mut result = None;
+                let _ = meta.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("tag") {
+                        let value = meta.value()?;
+                        let expr: Expr = value.parse()?;
+                        result = Some(expr);
+                    }
+                    Ok(())
+                });
+                if result.is_some() {
+                    return result;
+                }
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn make_generics(generics: &Generics, trait_name: TokenStream) -> Generics {
