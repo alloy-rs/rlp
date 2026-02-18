@@ -62,10 +62,7 @@ pub(crate) fn field_ident(index: usize, field: &syn::Field) -> TokenStream {
     )
 }
 
-pub(crate) fn parse_enum<'a>(
-    ast: &'a syn::DeriveInput,
-    derive_attr: &str,
-) -> Result<&'a DataEnum> {
+pub(crate) fn parse_enum<'a>(ast: &'a syn::DeriveInput, derive_attr: &str) -> Result<&'a DataEnum> {
     if let syn::Data::Enum(e) = &ast.data {
         Ok(e)
     } else {

@@ -101,6 +101,7 @@ impl fmt::Display for ErrorKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn error_new() {
@@ -151,7 +152,7 @@ mod tests {
     #[test]
     fn error_clone_copy() {
         let e = Error::with_bytepos(ErrorKind::LeadingZero, 5);
-        let cloned = e.clone();
+        let cloned = e;
         let copied = e;
         assert_eq!(e, cloned);
         assert_eq!(e, copied);

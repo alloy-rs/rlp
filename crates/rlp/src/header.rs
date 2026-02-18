@@ -1,6 +1,5 @@
 use crate::{
-    decode::static_left_pad, Encoder, Error, ErrorKind, Result, EMPTY_LIST_CODE,
-    EMPTY_STRING_CODE,
+    decode::static_left_pad, Encoder, Error, ErrorKind, Result, EMPTY_LIST_CODE, EMPTY_STRING_CODE,
 };
 use bytes::Buf;
 use core::hint::unreachable_unchecked;
@@ -108,8 +107,7 @@ impl Header {
     #[inline]
     pub fn decode_str<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
         let bytes = Self::decode_bytes(buf, false)?;
-        core::str::from_utf8(bytes)
-            .map_err(|_| Error::new(ErrorKind::Custom("invalid string")))
+        core::str::from_utf8(bytes).map_err(|_| Error::new(ErrorKind::Custom("invalid string")))
     }
 
     /// Extracts the next payload from the given buffer, advancing it.

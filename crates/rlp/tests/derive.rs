@@ -303,8 +303,8 @@ fn tagged_enum_matches_manual() {
         Bar(u16, u64),
     }
 
-    let derived_foo = alloy_rlp::encode(&FooBar::Foo(42));
-    let derived_bar = alloy_rlp::encode(&FooBar::Bar(7, 42));
+    let derived_foo = alloy_rlp::encode(FooBar::Foo(42));
+    let derived_bar = alloy_rlp::encode(FooBar::Bar(7, 42));
 
     // Build the expected encoding manually using encode_list
     use alloy_rlp::{encode_list, Encoder};

@@ -19,8 +19,8 @@ pub trait RlpDecodable: Sized {
 
 /// An active RLP decoder over a payload slice.
 ///
-/// Wraps a byte slice and provides methods for sequentially decoding RLP items, tracking byte position for error
-/// reporting.
+/// Wraps a byte slice and provides methods for sequentially decoding RLP items, tracking byte
+/// position for error reporting.
 #[derive(Debug)]
 pub struct Decoder<'de> {
     buf: &'de [u8],
@@ -502,7 +502,7 @@ mod tests {
 
     #[test]
     fn decoder_basic() {
-        let data = crate::encode(&vec![1u64, 2u64, 3u64]);
+        let data = crate::encode(vec![1u64, 2u64, 3u64]);
         let mut decoder = Decoder::new(&data).unwrap();
         assert_eq!(decoder.decode_next::<u64>().unwrap(), Some(1));
         assert_eq!(decoder.decode_next::<u64>().unwrap(), Some(2));
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn decoder_with_start() {
-        let data = crate::encode(&vec![10u64, 20u64]);
+        let data = crate::encode(vec![10u64, 20u64]);
         let mut decoder = Decoder::with_start(&data, 100).unwrap();
         assert_eq!(decoder.decode_next::<u64>().unwrap(), Some(10));
         assert_eq!(decoder.decode_next::<u64>().unwrap(), Some(20));
@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn decoder_remaining() {
-        let data = crate::encode(&vec![1u64, 2u64]);
+        let data = crate::encode(vec![1u64, 2u64]);
         let mut decoder = Decoder::new(&data).unwrap();
         let initial_len = decoder.remaining().len();
         assert!(initial_len > 0);
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn decoder_error() {
-        let data = crate::encode(&vec![1u64]);
+        let data = crate::encode(vec![1u64]);
         let decoder = Decoder::new(&data).unwrap();
         let e = decoder.error(ErrorKind::Custom("test"));
         assert_eq!(e.kind, ErrorKind::Custom("test"));
@@ -566,7 +566,7 @@ mod tests {
 
     #[test]
     fn decoder_decode_next_raw() {
-        let data = crate::encode(&vec![5u64, 6u64]);
+        let data = crate::encode(vec![5u64, 6u64]);
         let mut decoder = Decoder::new(&data).unwrap();
         // rlp_decode_raw defaults to rlp_decode, so this should work identically
         assert_eq!(decoder.decode_next_raw::<u64>().unwrap(), Some(5));
@@ -639,7 +639,7 @@ mod tests {
 
     #[test]
     fn decoder_bytepos_advances() {
-        let data = crate::encode(&vec![1u64, 2u64]);
+        let data = crate::encode(vec![1u64, 2u64]);
         let mut decoder = Decoder::new(&data).unwrap();
         assert_eq!(decoder.bytepos(), 0);
         decoder.decode_next::<u64>().unwrap(); // consumes 1 byte (single-byte int 1)
@@ -674,7 +674,7 @@ mod tests {
 
     #[test]
     fn decoder_bytepos_with_start_offset() {
-        let data = crate::encode(&vec![1u64]);
+        let data = crate::encode(vec![1u64]);
         let mut decoder = Decoder::with_start(&data, 100).unwrap();
         assert_eq!(decoder.bytepos(), 100);
         decoder.decode_next::<u64>().unwrap();
