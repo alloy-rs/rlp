@@ -26,6 +26,8 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
     let mut encountered_opt_item = false;
     let mut length_exprs = Vec::with_capacity(body.fields.len());
     let mut encode_exprs = Vec::with_capacity(body.fields.len());
+    let mut length_exprs_raw = Vec::with_capacity(body.fields.len());
+    let mut encode_exprs_raw = Vec::with_capacity(body.fields.len());
 
     while let Some((i, field)) = fields.next() {
         let is_flatten = attributes_include(&field.attrs, "flatten");
@@ -48,6 +50,12 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
 
         length_exprs.push(encodable_length(i, field, is_opt, fields.clone()));
         encode_exprs.push(encodable_field(i, field, is_opt, fields.clone()));
+
+        // Raw mode skips optional fields (symmetric with rlp_decode_raw).
+        if !is_opt {
+            length_exprs_raw.push(encodable_length(i, field, false, fields.clone()));
+            encode_exprs_raw.push(encodable_field(i, field, false, fields.clone()));
+        }
     }
 
     let name = &ast.ident;
@@ -77,12 +85,12 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
 
                 #[inline]
                 fn rlp_len_raw(&self) -> usize {
-                    self._alloy_rlp_payload_length()
+                    self._alloy_rlp_payload_length_raw()
                 }
 
                 #[inline]
                 fn rlp_encode_raw(&self, out: &mut alloy_rlp::Encoder<'_>) {
-                    #(#encode_exprs)*
+                    #(#encode_exprs_raw)*
                 }
             }
 
@@ -91,6 +99,12 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
                 #[inline]
                 fn _alloy_rlp_payload_length(&self) -> usize {
                     0usize #( + #length_exprs)*
+                }
+
+                #[allow(unused_parens)]
+                #[inline]
+                fn _alloy_rlp_payload_length_raw(&self) -> usize {
+                    0usize #( + #length_exprs_raw)*
                 }
             }
         };

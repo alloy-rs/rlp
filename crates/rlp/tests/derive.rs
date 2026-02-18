@@ -493,3 +493,56 @@ fn tuple_decode_too_few() {
     assert!(result.is_err());
     assert_eq!(result.unwrap_err().kind, ErrorKind::InputTooShort);
 }
+
+/// Last trailing optional field roundtrips values that encode as 0x80.
+#[test]
+fn option_zero_value_roundtrip() {
+    #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
+    #[rlp(trailing)]
+    struct S {
+        x: u64,
+        flag: Option<bool>,
+        val: Option<u64>,
+    }
+
+    for v in [
+        S { x: 1, flag: None, val: None },
+        S { x: 1, flag: None, val: Some(0) },
+        S { x: 1, flag: None, val: Some(42) },
+    ] {
+        let encoded = alloy_rlp::encode(&v);
+        let decoded = S::rlp_decode(&mut encoded.as_slice()).unwrap();
+        assert_eq!(v, decoded);
+    }
+}
+
+/// Flatten with inner trailing optionals: raw mode skips optional fields.
+#[test]
+fn flatten_with_inner_trailing_optional() {
+    #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
+    #[rlp(trailing)]
+    struct Inner {
+        a: u64,
+        b: Option<u64>,
+    }
+
+    #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
+    struct Outer {
+        #[rlp(flatten)]
+        inner: Inner,
+        c: u64,
+    }
+
+    let val = Outer { inner: Inner { a: 1, b: None }, c: 3 };
+    let encoded = alloy_rlp::encode(&val);
+    let decoded = Outer::rlp_decode(&mut encoded.as_slice()).unwrap();
+    assert_eq!(decoded, val);
+
+    // Raw encode/decode skip optionals and stay symmetric.
+    let s = Inner { a: 42, b: Some(99) };
+    let mut raw_buf = Vec::new();
+    s.rlp_encode_raw(&mut alloy_rlp::Encoder::new(&mut raw_buf));
+    let decoded = Inner::rlp_decode_raw(&mut raw_buf.as_slice()).unwrap();
+    assert_eq!(decoded, Inner { a: 42, b: None });
+    assert_eq!(s.rlp_len_raw(), raw_buf.len());
+}

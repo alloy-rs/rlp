@@ -13,14 +13,22 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         return impl_decodable_transparent(ast, body);
     }
 
-    let fields = body.fields.iter().enumerate();
+    let all_fields: Vec<_> = body.fields.iter().enumerate().collect();
 
     let supports_trailing_opt = attributes_include(&ast.attrs, "trailing");
+
+    let last_consuming_idx = all_fields
+        .iter()
+        .rev()
+        .find(|(_, f)| {
+            !attributes_include(&f.attrs, "skip") && !attributes_include(&f.attrs, "default")
+        })
+        .map(|(i, _)| *i);
 
     let mut encountered_opt_item = false;
     let mut decode_stmts = Vec::with_capacity(body.fields.len());
     let mut decode_stmts_raw = Vec::with_capacity(body.fields.len());
-    for (i, field) in fields {
+    for &(i, field) in &all_fields {
         let is_flatten = attributes_include(&field.attrs, "flatten");
         if is_flatten && is_optional(field) {
             let msg = "`#[rlp(flatten)]` cannot be used on `Option<T>` fields";
@@ -40,7 +48,8 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
             return Err(Error::new_spanned(field, msg));
         }
 
-        decode_stmts.push(decodable_field(i, field, is_opt));
+        let is_last_consuming = last_consuming_idx == Some(i);
+        decode_stmts.push(decodable_field(i, field, is_opt, is_last_consuming));
         decode_stmts_raw.push(decodable_field_raw(i, field));
     }
 
@@ -172,23 +181,40 @@ pub(crate) fn impl_decodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
     })
 }
 
-fn decodable_field(index: usize, field: &syn::Field, is_opt: bool) -> TokenStream {
+fn decodable_field(
+    index: usize,
+    field: &syn::Field,
+    is_opt: bool,
+    is_last_consuming: bool,
+) -> TokenStream {
     let ident = field_ident(index, field);
 
     if attributes_include(&field.attrs, "default") {
         quote! { #ident: alloy_rlp::private::Default::default(), }
     } else if is_opt {
-        quote! {
-            #ident: if started_len - b.len() < payload_length {
-                if alloy_rlp::private::Option::map_or(b.first(), false, |b| *b == #EMPTY_STRING_CODE) {
-                    alloy_rlp::Buf::advance(b, 1);
-                    None
-                } else {
+        if is_last_consuming {
+            // Last field: None = exhausted payload, no 0x80 sentinel check.
+            quote! {
+                #ident: if started_len - b.len() < payload_length {
                     Some(alloy_rlp::RlpDecodable::rlp_decode(b)?)
-                }
-            } else {
-                None
-            },
+                } else {
+                    None
+                },
+            }
+        } else {
+            // Middle field: 0x80 sentinel distinguishes None from subsequent Some values.
+            quote! {
+                #ident: if started_len - b.len() < payload_length {
+                    if alloy_rlp::private::Option::map_or(b.first(), false, |b| *b == #EMPTY_STRING_CODE) {
+                        alloy_rlp::Buf::advance(b, 1);
+                        None
+                    } else {
+                        Some(alloy_rlp::RlpDecodable::rlp_decode(b)?)
+                    }
+                } else {
+                    None
+                },
+            }
         }
     } else if attributes_include(&field.attrs, "flatten") {
         quote! { #ident: alloy_rlp::RlpDecodable::rlp_decode_raw(b)?, }
@@ -203,18 +229,8 @@ fn decodable_field_raw(index: usize, field: &syn::Field) -> TokenStream {
     if attributes_include(&field.attrs, "default") || attributes_include(&field.attrs, "skip") {
         quote! { #ident: alloy_rlp::private::Default::default(), }
     } else if is_optional(field) {
-        quote! {
-            #ident: if !b.is_empty() {
-                if alloy_rlp::private::Option::map_or(b.first(), false, |x| *x == #EMPTY_STRING_CODE) {
-                    alloy_rlp::Buf::advance(b, 1);
-                    None
-                } else {
-                    Some(alloy_rlp::RlpDecodable::rlp_decode(b)?)
-                }
-            } else {
-                None
-            },
-        }
+        // Raw mode has no framing; default to None to avoid consuming outer bytes.
+        quote! { #ident: alloy_rlp::private::None, }
     } else if attributes_include(&field.attrs, "flatten") {
         quote! { #ident: alloy_rlp::RlpDecodable::rlp_decode_raw(b)?, }
     } else {
