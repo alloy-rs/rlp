@@ -51,7 +51,7 @@ impl RlpDecodable for bool {
         Ok(match u8::rlp_decode(buf)? {
             0 => false,
             1 => true,
-            _ => return Err(ErrorKind::Custom("invalid bool value, must be 0 or 1")),
+            _ => return Err(ErrorKind::Custom("invalid bool value, must be 0 or 1").into()),
         })
     }
 }
@@ -60,7 +60,7 @@ impl<const N: usize> RlpDecodable for [u8; N] {
     #[inline]
     fn rlp_decode(from: &mut &[u8]) -> Result<Self> {
         let bytes = Header::decode_bytes(from, false)?;
-        Self::try_from(bytes).map_err(|_| ErrorKind::UnexpectedLength)
+        Self::try_from(bytes).map_err(|_| ErrorKind::UnexpectedLength.into())
     }
 }
 
@@ -159,7 +159,7 @@ mod std_impl {
                 16 => {
                     Ok(Self::V6(Ipv6Addr::from(slice_to_array::<16>(bytes).expect("infallible"))))
                 }
-                _ => Err(ErrorKind::UnexpectedLength),
+                _ => Err(ErrorKind::UnexpectedLength.into()),
             }
         }
     }
@@ -182,7 +182,7 @@ mod std_impl {
 
     #[inline]
     fn slice_to_array<const N: usize>(slice: &[u8]) -> Result<[u8; N]> {
-        slice.try_into().map_err(|_| ErrorKind::UnexpectedLength)
+        slice.try_into().map_err(|_| ErrorKind::UnexpectedLength.into())
     }
 }
 
@@ -199,7 +199,7 @@ pub fn decode_exact<T: RlpDecodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
     // check if there are any remaining bytes after decoding
     if !buf.is_empty() {
         // TODO: introduce a new variant TrailingBytes to better distinguish this error
-        return Err(ErrorKind::UnexpectedLength);
+        return Err(ErrorKind::UnexpectedLength.into());
     }
 
     Ok(out)
@@ -213,7 +213,7 @@ pub fn decode_exact<T: RlpDecodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
 #[inline]
 pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
     if data.len() > N {
-        return Err(ErrorKind::Overflow);
+        return Err(ErrorKind::Overflow.into());
     }
 
     let mut v = [0; N];
@@ -224,7 +224,7 @@ pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
     }
 
     if data[0] == 0 {
-        return Err(ErrorKind::LeadingZero);
+        return Err(ErrorKind::LeadingZero.into());
     }
 
     // SAFETY: length checked above
@@ -235,12 +235,17 @@ pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{encode, RlpEncodable};
+    use crate::{encode, Error, RlpEncodable};
     use core::fmt::Debug;
     use hex_literal::hex;
 
     #[allow(unused_imports)]
     use alloc::{string::String, vec::Vec};
+
+    /// Helper to create an `Error` from an `ErrorKind` with bytepos 0.
+    fn err(kind: ErrorKind) -> Error {
+        Error::new(kind)
+    }
 
     fn check_decode<'a, T, IT>(fixtures: IT)
     where
@@ -289,7 +294,7 @@ mod tests {
                 Ok(hex!("6f62636465666768696a6b6c6d")[..].to_vec().into()),
                 &hex!("8D6F62636465666768696A6B6C6D")[..],
             ),
-            (Err(ErrorKind::UnexpectedList), &hex!("C0")[..]),
+            (Err(err(ErrorKind::UnexpectedList)), &hex!("C0")[..]),
         ])
     }
 
@@ -297,8 +302,8 @@ mod tests {
     fn rlp_fixed_length() {
         check_decode([
             (Ok(hex!("6f62636465666768696a6b6c6d")), &hex!("8D6F62636465666768696A6B6C6D")[..]),
-            (Err(ErrorKind::UnexpectedLength), &hex!("8C6F62636465666768696A6B6C")[..]),
-            (Err(ErrorKind::UnexpectedLength), &hex!("8E6F62636465666768696A6B6C6D6E")[..]),
+            (Err(err(ErrorKind::UnexpectedLength)), &hex!("8C6F62636465666768696A6B6C")[..]),
+            (Err(err(ErrorKind::UnexpectedLength)), &hex!("8E6F62636465666768696A6B6C6D6E")[..]),
         ])
     }
 
@@ -309,15 +314,15 @@ mod tests {
             (Ok(0_u64), &hex!("80")[..]),
             (Ok(0x0505_u64), &hex!("820505")[..]),
             (Ok(0xCE05050505_u64), &hex!("85CE05050505")[..]),
-            (Err(ErrorKind::Overflow), &hex!("8AFFFFFFFFFFFFFFFFFF7C")[..]),
-            (Err(ErrorKind::InputTooShort), &hex!("8BFFFFFFFFFFFFFFFFFF7C")[..]),
-            (Err(ErrorKind::UnexpectedList), &hex!("C0")[..]),
-            (Err(ErrorKind::LeadingZero), &hex!("00")[..]),
-            (Err(ErrorKind::NonCanonicalSingleByte), &hex!("8105")[..]),
-            (Err(ErrorKind::LeadingZero), &hex!("8200F4")[..]),
-            (Err(ErrorKind::NonCanonicalSize), &hex!("B8020004")[..]),
+            (Err(err(ErrorKind::Overflow)), &hex!("8AFFFFFFFFFFFFFFFFFF7C")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("8BFFFFFFFFFFFFFFFFFF7C")[..]),
+            (Err(err(ErrorKind::UnexpectedList)), &hex!("C0")[..]),
+            (Err(err(ErrorKind::LeadingZero)), &hex!("00")[..]),
+            (Err(err(ErrorKind::NonCanonicalSingleByte)), &hex!("8105")[..]),
+            (Err(err(ErrorKind::LeadingZero)), &hex!("8200F4")[..]),
+            (Err(err(ErrorKind::NonCanonicalSize)), &hex!("B8020004")[..]),
             (
-                Err(ErrorKind::Overflow),
+                Err(err(ErrorKind::Overflow)),
                 &hex!("A101000000000000000000000000000000000000008B000000000000000000000000")[..],
             ),
         ])
@@ -351,32 +356,32 @@ mod tests {
     #[test]
     fn malformed_rlp() {
         check_decode::<Bytes, _>([
-            (Err(ErrorKind::InputTooShort), &hex!("C1")[..]),
-            (Err(ErrorKind::InputTooShort), &hex!("D7")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("C1")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("D7")[..]),
         ]);
         check_decode::<[u8; 5], _>([
-            (Err(ErrorKind::InputTooShort), &hex!("C1")[..]),
-            (Err(ErrorKind::InputTooShort), &hex!("D7")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("C1")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("D7")[..]),
         ]);
         #[cfg(feature = "std")]
         check_decode::<std::net::IpAddr, _>([
-            (Err(ErrorKind::InputTooShort), &hex!("C1")[..]),
-            (Err(ErrorKind::InputTooShort), &hex!("D7")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("C1")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("D7")[..]),
         ]);
         check_decode::<Vec<u8>, _>([
-            (Err(ErrorKind::InputTooShort), &hex!("C1")[..]),
-            (Err(ErrorKind::InputTooShort), &hex!("D7")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("C1")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("D7")[..]),
         ]);
         check_decode::<String, _>([
-            (Err(ErrorKind::InputTooShort), &hex!("C1")[..]),
-            (Err(ErrorKind::InputTooShort), &hex!("D7")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("C1")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("D7")[..]),
         ]);
         check_decode::<String, _>([
-            (Err(ErrorKind::InputTooShort), &hex!("C1")[..]),
-            (Err(ErrorKind::InputTooShort), &hex!("D7")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("C1")[..]),
+            (Err(err(ErrorKind::InputTooShort)), &hex!("D7")[..]),
         ]);
-        check_decode::<u8, _>([(Err(ErrorKind::InputTooShort), &hex!("82")[..])]);
-        check_decode::<u64, _>([(Err(ErrorKind::InputTooShort), &hex!("82")[..])]);
+        check_decode::<u8, _>([(Err(err(ErrorKind::InputTooShort)), &hex!("82")[..])]);
+        check_decode::<u64, _>([(Err(err(ErrorKind::InputTooShort)), &hex!("82")[..])]);
     }
 
     #[test]
@@ -386,7 +391,7 @@ mod tests {
             assert_eq!(decode_exact::<T>(&encoded), Ok(input));
             assert_eq!(
                 decode_exact::<T>([encoded, vec![0x00]].concat()),
-                Err(ErrorKind::UnexpectedLength)
+                Err(Error::new(ErrorKind::UnexpectedLength))
             );
         }
 
