@@ -288,7 +288,7 @@ fn tagged_enum_unknown_tag() {
     encoded[1] = 99;
     let result = OnlyOne::rlp_decode(&mut encoded.as_slice());
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err().kind, ErrorKind::Custom("unknown variant tag"));
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::Custom("unknown variant tag"));
 }
 
 /// Test that `#[rlp(tagged)]` roundtrips match the manual example in examples/enum.rs.
@@ -482,7 +482,7 @@ fn tuple_decode_trailing_bytes() {
     let data = alloy_rlp::encode((1u64, 2u64));
     let result = <(u64,)>::rlp_decode(&mut data.as_slice());
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err().kind, ErrorKind::ListLengthMismatch { expected: 0, got: 1 });
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::ListLengthMismatch { expected: 0, got: 1 });
 }
 
 /// Test tuple decode rejects too-few elements.
@@ -491,7 +491,7 @@ fn tuple_decode_too_few() {
     let data = alloy_rlp::encode((1u64,));
     let result = <(u64, u64)>::rlp_decode(&mut data.as_slice());
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err().kind, ErrorKind::InputTooShort);
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::InputTooShort);
 }
 
 /// Last trailing optional field roundtrips values that encode as 0x80.

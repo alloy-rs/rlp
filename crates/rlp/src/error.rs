@@ -4,12 +4,12 @@ use core::fmt;
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 /// RLP error with byte position context.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Error {
     /// The byte position in the input where the error occurred.
-    pub bytepos: usize,
+    bytepos: usize,
     /// The kind of error.
-    pub kind: ErrorKind,
+    kind: ErrorKind,
 }
 
 impl Error {
@@ -23,6 +23,18 @@ impl Error {
     #[inline]
     pub const fn with_bytepos(kind: ErrorKind, bytepos: usize) -> Self {
         Self { bytepos, kind }
+    }
+
+    /// Returns the byte position in the input where the error occurred.
+    #[inline]
+    pub const fn bytepos(&self) -> usize {
+        self.bytepos
+    }
+
+    /// Returns the kind of error.
+    #[inline]
+    pub const fn kind(&self) -> ErrorKind {
+        self.kind
     }
 }
 
@@ -106,22 +118,22 @@ mod tests {
     #[test]
     fn error_new() {
         let e = Error::new(ErrorKind::Overflow);
-        assert_eq!(e.bytepos, 0);
-        assert_eq!(e.kind, ErrorKind::Overflow);
+        assert_eq!(e.bytepos(), 0);
+        assert_eq!(e.kind(), ErrorKind::Overflow);
     }
 
     #[test]
     fn error_with_bytepos() {
         let e = Error::with_bytepos(ErrorKind::InputTooShort, 42);
-        assert_eq!(e.bytepos, 42);
-        assert_eq!(e.kind, ErrorKind::InputTooShort);
+        assert_eq!(e.bytepos(), 42);
+        assert_eq!(e.kind(), ErrorKind::InputTooShort);
     }
 
     #[test]
     fn error_from_error_kind() {
         let e: Error = ErrorKind::LeadingZero.into();
-        assert_eq!(e.bytepos, 0);
-        assert_eq!(e.kind, ErrorKind::LeadingZero);
+        assert_eq!(e.bytepos(), 0);
+        assert_eq!(e.kind(), ErrorKind::LeadingZero);
     }
 
     #[test]
@@ -150,11 +162,9 @@ mod tests {
     }
 
     #[test]
-    fn error_clone_copy() {
+    fn error_clone() {
         let e = Error::with_bytepos(ErrorKind::LeadingZero, 5);
-        let cloned = e;
-        let copied = e;
+        let cloned = e.clone();
         assert_eq!(e, cloned);
-        assert_eq!(e, copied);
     }
 }

@@ -34,7 +34,8 @@ impl<'de> Decoder<'de> {
     /// Creates a new decoder by reading an RLP list header from the input and
     /// capturing the list payload.
     pub fn new(mut payload: &'de [u8]) -> Result<Self> {
-        let payload_view = Header::decode_bytes(&mut payload, true)?;
+        let payload_view = Header::decode_bytes(&mut payload, true)
+            .map_err(|e| Error::with_bytepos(e.kind(), 0))?;
         let len = payload_view.len();
         Ok(Self { buf: payload_view, original_len: len, start: 0 })
     }
@@ -47,7 +48,8 @@ impl<'de> Decoder<'de> {
 
     /// Creates a new decoder with a specific starting byte position for error reporting.
     pub fn with_start(mut payload: &'de [u8], start: usize) -> Result<Self> {
-        let payload_view = Header::decode_bytes(&mut payload, true)?;
+        let payload_view = Header::decode_bytes(&mut payload, true)
+            .map_err(|e| Error::with_bytepos(e.kind(), start))?;
         let len = payload_view.len();
         Ok(Self { buf: payload_view, original_len: len, start })
     }
@@ -70,13 +72,46 @@ impl<'de> Decoder<'de> {
         self.start.saturating_add(self.original_len - self.buf.len())
     }
 
+    /// Creates an [`Error`] with the given [`ErrorKind`] at the current byte position.
+    pub const fn error(&self, kind: ErrorKind) -> Error {
+        Error::with_bytepos(kind, self.bytepos())
+    }
+
+    /// Decodes an RLP [`Header`] at the current position, advancing the buffer.
+    ///
+    /// Errors include the current byte position.
+    #[inline]
+    pub fn decode_header(&mut self) -> Result<Header> {
+        let pos = self.bytepos();
+        Header::decode(&mut self.buf).map_err(|e| Error::with_bytepos(e.kind(), pos))
+    }
+
+    /// Decodes the payload bytes (list or string) at the current position, advancing the buffer.
+    ///
+    /// Errors include the current byte position.
+    #[inline]
+    pub fn decode_bytes(&mut self, is_list: bool) -> Result<&'de [u8]> {
+        let pos = self.bytepos();
+        Header::decode_bytes(&mut self.buf, is_list).map_err(|e| Error::with_bytepos(e.kind(), pos))
+    }
+
+    /// Decodes a string slice at the current position, advancing the buffer.
+    ///
+    /// Errors include the current byte position.
+    #[inline]
+    pub fn decode_str(&mut self) -> Result<&'de str> {
+        let pos = self.bytepos();
+        Header::decode_str(&mut self.buf).map_err(|e| Error::with_bytepos(e.kind(), pos))
+    }
+
     /// Decode the next item from the buffer.
     #[inline]
     pub fn decode_next<T: RlpDecodable>(&mut self) -> Result<Option<T>> {
         if self.buf.is_empty() {
             Ok(None)
         } else {
-            T::rlp_decode(&mut self.buf).map(Some)
+            let pos = self.bytepos();
+            T::rlp_decode(&mut self.buf).map(Some).map_err(|e| Error::with_bytepos(e.kind(), pos))
         }
     }
 
@@ -86,13 +121,11 @@ impl<'de> Decoder<'de> {
         if self.buf.is_empty() {
             Ok(None)
         } else {
-            T::rlp_decode_raw(&mut self.buf).map(Some)
+            let pos = self.bytepos();
+            T::rlp_decode_raw(&mut self.buf)
+                .map(Some)
+                .map_err(|e| Error::with_bytepos(e.kind(), pos))
         }
-    }
-
-    /// Creates an [`Error`] with the given [`ErrorKind`] at the current byte position.
-    pub const fn error(&self, kind: ErrorKind) -> Error {
-        Error::with_bytepos(kind, self.bytepos())
     }
 }
 
@@ -529,7 +562,7 @@ mod tests {
         // A non-list RLP item (string "hello")
         let data = crate::encode("hello");
         let result = Decoder::new(&data);
-        assert_eq!(result.unwrap_err().kind, ErrorKind::UnexpectedString);
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::UnexpectedString);
     }
 
     #[test]
@@ -560,8 +593,8 @@ mod tests {
         let data = crate::encode(vec![1u64]);
         let decoder = Decoder::new(&data).unwrap();
         let e = decoder.error(ErrorKind::Custom("test"));
-        assert_eq!(e.kind, ErrorKind::Custom("test"));
-        assert_eq!(e.bytepos, decoder.bytepos());
+        assert_eq!(e.kind(), ErrorKind::Custom("test"));
+        assert_eq!(e.bytepos(), decoder.bytepos());
     }
 
     #[test]
@@ -587,7 +620,7 @@ mod tests {
     #[test]
     fn decoder_new_empty_input() {
         let result = Decoder::new(&[]);
-        assert_eq!(result.unwrap_err().kind, ErrorKind::InputTooShort);
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::InputTooShort);
     }
 
     #[test]
@@ -604,7 +637,7 @@ mod tests {
         let data = crate::encode("hello");
         let result = Decoder::with_start(&data, 50);
         let e = result.unwrap_err();
-        assert_eq!(e.kind, ErrorKind::UnexpectedString);
+        assert_eq!(e.kind(), ErrorKind::UnexpectedString);
     }
 
     #[test]
@@ -624,7 +657,7 @@ mod tests {
         let mut decoder = Decoder::new(corrupt).unwrap();
         let result = decoder.decode_next::<u64>();
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind, ErrorKind::LeadingZero);
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::LeadingZero);
     }
 
     #[test]
@@ -634,7 +667,7 @@ mod tests {
         let mut decoder = Decoder::new(corrupt).unwrap();
         let result = decoder.decode_next_raw::<u64>();
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind, ErrorKind::LeadingZero);
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::LeadingZero);
     }
 
     #[test]
@@ -679,5 +712,18 @@ mod tests {
         assert_eq!(decoder.bytepos(), 100);
         decoder.decode_next::<u64>().unwrap();
         assert_eq!(decoder.bytepos(), 101);
+    }
+
+    #[test]
+    fn decoder_methods_propagate_bytepos() {
+        // After consuming one item, errors from the Decoder's header-decoding methods
+        // carry the position of the failing item, not 0.
+        // [0x01, 0xC1, 0x01] = string(1) at pos 0, list([1]) at pos 1.
+        let raw: &[u8] = &[0x01, 0xC1, 0x01];
+        let mut decoder = Decoder::from_raw(raw);
+        decoder.decode_bytes(false).unwrap();
+        let e = decoder.decode_bytes(false).unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::UnexpectedList);
+        assert_eq!(e.bytepos(), 1);
     }
 }
