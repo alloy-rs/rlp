@@ -263,8 +263,10 @@ pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
 mod tests {
     use super::*;
     use crate::{encode, Encodable};
-    use core::fmt::Debug;
-    use core::num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize};
+    use core::{
+        fmt::Debug,
+        num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize},
+    };
     use hex_literal::hex;
 
     #[allow(unused_imports)]
