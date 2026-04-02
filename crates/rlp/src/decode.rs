@@ -1,6 +1,11 @@
 use crate::{Error, Header, Result};
 use bytes::{Bytes, BytesMut};
-use core::marker::{PhantomData, PhantomPinned};
+use core::{
+    marker::{PhantomData, PhantomPinned},
+    num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize},
+};
+
+const NON_ZERO_INTEGER_ERROR: &str = "non-zero integer cannot be zero";
 
 /// A type that can be decoded from an RLP blob.
 pub trait Decodable: Sized {
@@ -77,6 +82,28 @@ macro_rules! decode_integer {
 }
 
 decode_integer!(u8, u16, u32, u64, usize, u128);
+
+macro_rules! decode_nonzero_integer {
+    ($($t:ty => $inner:ty),+ $(,)?) => {$(
+        impl Decodable for $t {
+            #[inline]
+            fn decode(buf: &mut &[u8]) -> Result<Self> {
+                <$inner>::decode(buf).and_then(|value| {
+                    <$t>::new(value).ok_or(Error::Custom(NON_ZERO_INTEGER_ERROR))
+                })
+            }
+        }
+    )+};
+}
+
+decode_nonzero_integer! {
+    NonZeroU8 => u8,
+    NonZeroU16 => u16,
+    NonZeroU32 => u32,
+    NonZeroU64 => u64,
+    NonZeroUsize => usize,
+    NonZeroU128 => u128,
+}
 
 impl Decodable for Bytes {
     #[inline]
@@ -237,6 +264,7 @@ mod tests {
     use super::*;
     use crate::{encode, Encodable};
     use core::fmt::Debug;
+    use core::num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize};
     use hex_literal::hex;
 
     #[allow(unused_imports)]
@@ -321,6 +349,24 @@ mod tests {
                 &hex!("A101000000000000000000000000000000000000008B000000000000000000000000")[..],
             ),
         ])
+    }
+
+    #[test]
+    fn rlp_nonzero_uints() {
+        check_decode([(Ok(NonZeroU8::new(9).unwrap()), &hex!("09")[..])]);
+        check_decode([(Ok(NonZeroU16::new(0x0505).unwrap()), &hex!("820505")[..])]);
+        check_decode([(Ok(NonZeroU32::new(0xCE0505).unwrap()), &hex!("83CE0505")[..])]);
+        check_decode([(Ok(NonZeroU64::new(0xCE05050505).unwrap()), &hex!("85CE05050505")[..])]);
+        check_decode([(Ok(NonZeroUsize::new(0x80).unwrap()), &hex!("8180")[..])]);
+        check_decode([(
+            Ok(NonZeroU128::new(0x10203E405060708090A0B0C0D0E0F2).unwrap()),
+            &hex!("8f10203e405060708090a0b0c0d0e0f2")[..],
+        )]);
+        check_decode::<NonZeroU8, _>([(
+            Err(Error::Custom(NON_ZERO_INTEGER_ERROR)),
+            &hex!("80")[..],
+        )]);
+        check_decode::<NonZeroU8, _>([(Err(Error::LeadingZero), &hex!("00")[..])]);
     }
 
     #[test]
