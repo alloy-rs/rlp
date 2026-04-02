@@ -3,6 +3,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use core::{
     borrow::Borrow,
     marker::{PhantomData, PhantomPinned},
+    num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize},
 };
 
 #[allow(unused_imports)]
@@ -193,6 +194,33 @@ macro_rules! uint_impl {
 }
 
 uint_impl!(u8, u16, u32, u64, usize, u128);
+
+macro_rules! nonzero_uint_impl {
+    ($($t:ty => $inner:ty),+ $(,)?) => {$(
+        impl Encodable for $t {
+            #[inline]
+            fn length(&self) -> usize {
+                self.get().length()
+            }
+
+            #[inline]
+            fn encode(&self, out: &mut dyn BufMut) {
+                self.get().encode(out);
+            }
+        }
+
+        impl_max_encoded_len!($t, <$inner as MaxEncodedLenAssoc>::LEN);
+    )+};
+}
+
+nonzero_uint_impl! {
+    NonZeroU8 => u8,
+    NonZeroU16 => u16,
+    NonZeroU32 => u32,
+    NonZeroU64 => u64,
+    NonZeroUsize => usize,
+    NonZeroU128 => u128,
+}
 
 impl<T: Encodable> Encodable for Vec<T> {
     #[inline]
@@ -386,6 +414,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize};
     use hex_literal::hex;
 
     fn encoded_list<T: Encodable + Clone>(t: &[T]) -> BytesMut {
@@ -488,6 +517,22 @@ mod tests {
         uint_rlp_test!(u128_fixtures());
         // #[cfg(feature = "ethnum")]
         // uint_rlp_test!(u256_fixtures());
+    }
+
+    #[test]
+    fn rlp_nonzero_uints() {
+        uint_rlp_test!([(NonZeroU8::new(1).unwrap(), &hex!("01")[..])]);
+        uint_rlp_test!([(NonZeroU16::new(0x400).unwrap(), &hex!("820400")[..])]);
+        uint_rlp_test!([(NonZeroU32::new(0xFFCCB5).unwrap(), &hex!("83ffccb5")[..])]);
+        uint_rlp_test!([(
+            NonZeroU64::new(0xFFCCB5DDFFEE1483).unwrap(),
+            &hex!("88ffccb5ddffee1483")[..]
+        )]);
+        uint_rlp_test!([(NonZeroUsize::new(0x80).unwrap(), &hex!("8180")[..])]);
+        uint_rlp_test!([(
+            NonZeroU128::new(0x10203E405060708090A0B0C0D0E0F2).unwrap(),
+            &hex!("8f10203e405060708090a0b0c0d0e0f2")[..],
+        )]);
     }
 
     /*
