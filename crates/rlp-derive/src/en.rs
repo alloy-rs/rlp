@@ -1,5 +1,6 @@
 use crate::utils::{
-    attributes_include, field_ident, is_optional, make_generics, parse_struct, EMPTY_STRING_CODE,
+    attributes_include, field_ident, is_optional, make_generics, parse_struct, parse_trailing_opts,
+    TrailingOpts, EMPTY_STRING_CODE,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -16,28 +17,47 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         .filter(|(_, field)| !attributes_include(&field.attrs, "skip"))
         .peekable();
 
-    let supports_trailing_opt = attributes_include(&ast.attrs, "trailing");
+    let trailing_opts = parse_trailing_opts(&ast.attrs);
 
     let mut encountered_opt_item = false;
     let mut length_exprs = Vec::with_capacity(body.fields.len());
     let mut encode_exprs = Vec::with_capacity(body.fields.len());
+    let mut opt_field_idents = Vec::new();
 
     while let Some((i, field)) = fields.next() {
         let is_opt = is_optional(field);
         if is_opt {
-            if !supports_trailing_opt {
+            if !trailing_opts.enabled {
                 let msg = "optional fields are disabled.\nAdd the `#[rlp(trailing)]` attribute to the struct in order to enable optional fields";
                 return Err(Error::new_spanned(field, msg));
             }
             encountered_opt_item = true;
+            opt_field_idents.push(field_ident(i, field));
         } else if encountered_opt_item {
             let msg = "all the fields after the first optional field must be optional";
             return Err(Error::new_spanned(field, msg));
         }
 
-        length_exprs.push(encodable_length(i, field, is_opt, fields.clone()));
-        encode_exprs.push(encodable_field(i, field, is_opt, fields.clone()));
+        length_exprs.push(encodable_length(i, field, is_opt, trailing_opts, fields.clone()));
+        encode_exprs.push(encodable_field(i, field, is_opt, trailing_opts, fields.clone()));
     }
+
+    let no_gaps_asserts = if trailing_opts.no_gaps && opt_field_idents.len() > 1 {
+        let mut asserts = Vec::new();
+        for window in opt_field_idents.windows(2) {
+            let cur = &window[0];
+            let next = &window[1];
+            asserts.push(quote! {
+                debug_assert!(
+                    self.#cur.is_some() || self.#next.is_none(),
+                    "no_gaps: gap detected — field after a None field is Some",
+                );
+            });
+        }
+        asserts
+    } else {
+        Vec::new()
+    };
 
     let name = &ast.ident;
     let generics = make_generics(&ast.generics, quote!(alloy_rlp::Encodable));
@@ -56,6 +76,7 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
 
                 #[inline]
                 fn encode(&self, out: &mut dyn alloy_rlp::BufMut) {
+                    #(#no_gaps_asserts)*
                     alloy_rlp::Header {
                         list: true,
                         payload_length: self._alloy_rlp_payload_length(),
@@ -162,19 +183,25 @@ fn encodable_length<'a>(
     index: usize,
     field: &syn::Field,
     is_opt: bool,
+    trailing_opts: TrailingOpts,
     mut remaining: Peekable<impl Iterator<Item = (usize, &'a syn::Field)>>,
 ) -> TokenStream {
     let ident = field_ident(index, field);
 
     if is_opt {
-        let default = if remaining.peek().is_some() {
-            let condition = remaining_opt_fields_some_condition(remaining);
-            quote! { (#condition) as usize }
+        if trailing_opts.no_gaps {
+            // no_gaps: no 0x80 placeholders for interior Nones
+            quote! { self.#ident.as_ref().map(|val| alloy_rlp::Encodable::length(val)).unwrap_or(0) }
         } else {
-            quote! { 0 }
-        };
+            let default = if remaining.peek().is_some() {
+                let condition = remaining_opt_fields_some_condition(remaining);
+                quote! { (#condition) as usize }
+            } else {
+                quote! { 0 }
+            };
 
-        quote! { self.#ident.as_ref().map(|val| alloy_rlp::Encodable::length(val)).unwrap_or(#default) }
+            quote! { self.#ident.as_ref().map(|val| alloy_rlp::Encodable::length(val)).unwrap_or(#default) }
+        }
     } else {
         quote! { alloy_rlp::Encodable::length(&self.#ident) }
     }
@@ -184,6 +211,7 @@ fn encodable_field<'a>(
     index: usize,
     field: &syn::Field,
     is_opt: bool,
+    trailing_opts: TrailingOpts,
     mut remaining: Peekable<impl Iterator<Item = (usize, &'a syn::Field)>>,
 ) -> TokenStream {
     let ident = field_ident(index, field);
@@ -195,7 +223,10 @@ fn encodable_field<'a>(
             }
         };
 
-        if remaining.peek().is_some() {
+        if trailing_opts.no_gaps {
+            // no_gaps: just encode if Some, skip if None (no placeholder)
+            quote! { #if_some_encode }
+        } else if remaining.peek().is_some() {
             let condition = remaining_opt_fields_some_condition(remaining);
             quote! {
                 #if_some_encode

@@ -61,6 +61,112 @@ const fn opt() {
     }
 }
 
+#[test]
+fn trailing_no_gaps() {
+    #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
+    #[rlp(trailing(no_gaps))]
+    struct NoGaps {
+        required: u64,
+        a: Option<[u8; 32]>,
+        b: Option<[u8; 32]>,
+    }
+
+    let h1 = [1u8; 32];
+    let h2 = [2u8; 32];
+
+    // Roundtrip with all fields present.
+    let val = NoGaps { required: 1, a: Some(h1), b: Some(h2) };
+    let mut buf = Vec::new();
+    val.encode(&mut buf);
+    let decoded = NoGaps::decode(&mut buf.as_slice()).unwrap();
+    assert_eq!(val, decoded);
+
+    // Roundtrip with all optional fields absent.
+    let val = NoGaps { required: 1, a: None, b: None };
+    buf.clear();
+    val.encode(&mut buf);
+    assert_eq!(buf, vec![0xc1, 0x01]);
+    let decoded = NoGaps::decode(&mut buf.as_slice()).unwrap();
+    assert_eq!(val, decoded);
+
+    // Roundtrip with first present, second absent.
+    let val = NoGaps { required: 1, a: Some(h1), b: None };
+    buf.clear();
+    val.encode(&mut buf);
+    let decoded = NoGaps::decode(&mut buf.as_slice()).unwrap();
+    assert_eq!(val, decoded);
+
+    // With no_gaps, 0x80 in the payload is decoded as Some (attempting to decode the inner
+    // type), not as a None placeholder. For [u8; 32] this fails since 0x80 is too short.
+    let non_canonical = vec![0xc2, 0x01, 0x80];
+    assert!(NoGaps::decode(&mut non_canonical.as_slice()).is_err());
+}
+
+#[test]
+fn trailing_canonical() {
+    #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
+    #[rlp(trailing(canonical))]
+    struct Canonical {
+        required: u64,
+        a: Option<[u8; 32]>,
+        b: Option<[u8; 32]>,
+    }
+
+    let h1 = [1u8; 32];
+    let h2 = [2u8; 32];
+
+    // Roundtrip with all fields present.
+    let val = Canonical { required: 1, a: Some(h1), b: Some(h2) };
+    let mut buf = Vec::new();
+    val.encode(&mut buf);
+    let decoded = Canonical::decode(&mut buf.as_slice()).unwrap();
+    assert_eq!(val, decoded);
+
+    // Roundtrip with all optional fields absent.
+    let val = Canonical { required: 1, a: None, b: None };
+    buf.clear();
+    val.encode(&mut buf);
+    assert_eq!(buf, vec![0xc1, 0x01]);
+    let decoded = Canonical::decode(&mut buf.as_slice()).unwrap();
+    assert_eq!(val, decoded);
+
+    // Roundtrip with first present, second absent.
+    let val = Canonical { required: 1, a: Some(h1), b: None };
+    buf.clear();
+    val.encode(&mut buf);
+    let decoded = Canonical::decode(&mut buf.as_slice()).unwrap();
+    assert_eq!(val, decoded);
+
+    // Roundtrip with first absent, second present — uses 0x80 placeholder for `a`.
+    let val = Canonical { required: 1, a: None, b: Some(h2) };
+    buf.clear();
+    val.encode(&mut buf);
+    assert_eq!(buf[1], 0x01); // required
+    assert_eq!(buf[2], 0x80); // None placeholder
+    let decoded = Canonical::decode(&mut buf.as_slice()).unwrap();
+    assert_eq!(val, decoded);
+
+    // Non-canonical: trailing 0x80 is decoded as Some, which fails for [u8; 32].
+    let non_canonical = vec![0xc2, 0x01, 0x80];
+    assert!(Canonical::decode(&mut non_canonical.as_slice()).is_err());
+}
+
+/// Test that trailing options compile with generics.
+#[test]
+const fn trailing_opts_compiles() {
+    #[derive(RlpEncodable, RlpDecodable)]
+    #[rlp(trailing)]
+    struct PlainTrailing<T>(Option<Vec<T>>);
+
+    #[derive(RlpEncodable, RlpDecodable)]
+    #[rlp(trailing(no_gaps))]
+    struct NoGapsTrailing<T>(Option<Vec<T>>);
+
+    #[derive(RlpEncodable, RlpDecodable)]
+    #[rlp(trailing(canonical))]
+    struct CanonicalTrailing<T>(Option<Vec<T>>);
+}
+
 /// Test that multiple attributes can be combined in a single `#[rlp(...)]`.
 /// See <https://github.com/alloy-rs/rlp/issues/9>
 #[test]
