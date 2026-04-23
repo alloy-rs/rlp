@@ -126,15 +126,25 @@ impl Decodable for alloc::string::String {
     }
 }
 
+/// Decodes an RLP list and appends each item to the provided vector.
+///
+/// # Errors
+///
+/// Returns an error if the input is not a valid RLP list or any item fails to decode.
+#[inline]
+pub fn decode_append<T: Decodable>(buf: &mut &[u8], out: &mut alloc::vec::Vec<T>) -> Result<()> {
+    let mut payload = Header::decode_bytes(buf, true)?;
+    while !payload.is_empty() {
+        out.push(T::decode(&mut payload)?);
+    }
+    Ok(())
+}
+
 impl<T: Decodable> Decodable for alloc::vec::Vec<T> {
     #[inline]
     fn decode(buf: &mut &[u8]) -> Result<Self> {
-        let mut bytes = Header::decode_bytes(buf, true)?;
         let mut vec = Self::new();
-        let payload_view = &mut bytes;
-        while !payload_view.is_empty() {
-            vec.push(T::decode(payload_view)?);
-        }
+        decode_append(buf, &mut vec)?;
         Ok(vec)
     }
 }
@@ -377,6 +387,20 @@ mod tests {
             (Ok(vec![]), &hex!("C0")[..]),
             (Ok(vec![0xBBCCB5_u64, 0xFFC0B5_u64]), &hex!("C883BBCCB583FFC0B5")[..]),
         ])
+    }
+
+    #[test]
+    fn rlp_decode_append_appends_to_existing_vec() {
+        let mut input = &hex!("C883BBCCB583FFC0B5")[..];
+        let mut values = Vec::with_capacity(4);
+        values.push(0x01);
+        let capacity = values.capacity();
+
+        decode_append::<u64>(&mut input, &mut values).unwrap();
+
+        assert!(input.is_empty());
+        assert_eq!(values, vec![0x01, 0xBBCCB5_u64, 0xFFC0B5_u64]);
+        assert_eq!(values.capacity(), capacity);
     }
 
     #[cfg(feature = "std")]
