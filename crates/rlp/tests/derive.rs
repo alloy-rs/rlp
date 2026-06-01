@@ -12,6 +12,13 @@ fn assert_err_kind<T>(result: alloy_rlp::Result<T>, expected: ErrorKind) {
     }
 }
 
+fn decode<T>(bytes: impl AsRef<[u8]>) -> alloy_rlp::Result<T>
+where
+    T: for<'de> RlpDecodable<'de>,
+{
+    alloy_rlp::decode_exact(bytes)
+}
+
 #[test]
 fn simple_derive() {
     #[derive(RlpEncodable, RlpDecodable, RlpMaxEncodedLen, PartialEq, Debug)]
@@ -22,14 +29,11 @@ fn simple_derive() {
     // roundtrip fidelity
     let mut buf = Vec::new();
     thing.rlp_encode(&mut Encoder::new(&mut buf));
-    let decoded = MyThing::rlp_decode(&mut buf.as_slice()).unwrap();
+    let decoded = decode::<MyThing>(&buf).unwrap();
     assert_eq!(thing, decoded);
 
     // does not panic on short input
-    assert_eq!(
-        Err(Error::new(ErrorKind::InputTooShort)),
-        MyThing::rlp_decode(&mut [0x8c; 11].as_ref())
-    )
+    assert_err_kind(decode::<MyThing>([0x8c; 11]), ErrorKind::InputTooShort)
 }
 
 #[test]
@@ -93,7 +97,7 @@ fn multiple_attrs_combined() {
     let mut buf = Vec::new();
     foo.rlp_encode(&mut Encoder::new(&mut buf));
 
-    let decoded = Foo::rlp_decode(&mut buf.as_slice()).unwrap();
+    let decoded = decode::<Foo>(&buf).unwrap();
     assert_eq!(decoded.bar, 42);
     assert_eq!(decoded.cache, Cache::default());
 
@@ -110,7 +114,7 @@ fn multiple_attrs_combined() {
     let mut buf2 = Vec::new();
     bar.rlp_encode(&mut Encoder::new(&mut buf2));
 
-    let decoded2 = Bar::rlp_decode(&mut buf2.as_slice()).unwrap();
+    let decoded2 = decode::<Bar>(&buf2).unwrap();
     assert_eq!(decoded2.baz, 99);
     assert_eq!(decoded2.cache, Cache::default());
 }
@@ -139,7 +143,7 @@ fn skip_field() {
         pub value: u64,
     }
 
-    let decoded = WithoutSkip::rlp_decode(&mut buf.as_slice()).unwrap();
+    let decoded = decode::<WithoutSkip>(&buf).unwrap();
     assert_eq!(decoded.value, 42);
 }
 
@@ -147,20 +151,20 @@ fn skip_field() {
 fn tuple_roundtrips_and_raw_modes() {
     fn check<T>(value: T)
     where
-        T: RlpEncodable + RlpDecodable + PartialEq + std::fmt::Debug,
+        T: RlpEncodable + for<'de> RlpDecodable<'de> + PartialEq + std::fmt::Debug,
     {
         let encoded = alloy_rlp::encode(&value);
         assert_eq!(encoded.len(), value.rlp_len());
-        let decoded = T::rlp_decode(&mut encoded.as_slice()).unwrap();
+        let decoded = decode::<T>(&encoded).unwrap();
         assert_eq!(decoded, value);
 
         let mut raw = Vec::new();
         value.rlp_encode_raw(&mut Encoder::new(&mut raw));
         assert_eq!(raw.len(), value.rlp_len_raw());
-        let mut raw_slice = raw.as_slice();
-        let decoded_raw = T::rlp_decode_raw(&mut raw_slice).unwrap();
+        let mut raw_decoder = Decoder::new(&raw);
+        let decoded_raw = T::rlp_decode_raw(&mut raw_decoder).unwrap();
         assert_eq!(decoded_raw, value);
-        assert!(raw_slice.is_empty());
+        assert!(raw_decoder.is_empty());
         assert_ne!(encoded, raw);
     }
 
@@ -206,15 +210,12 @@ fn tuple_roundtrips_and_raw_modes() {
 #[test]
 fn tuple_decode_rejects_malformed_lists() {
     let too_few = alloy_rlp::encode((1u8,));
-    assert_err_kind(<(u8, u8)>::rlp_decode(&mut too_few.as_slice()), ErrorKind::InputTooShort);
+    assert_err_kind(decode::<(u8, u8)>(&too_few), ErrorKind::InputTooShort);
 
     let extra = alloy_rlp::encode((1u8, 2u8));
-    assert_err_kind(
-        <(u8,)>::rlp_decode(&mut extra.as_slice()),
-        ErrorKind::ListLengthMismatch { expected: 2, got: 1 },
-    );
+    assert_err_kind(decode::<(u8,)>(&extra), ErrorKind::ListLengthMismatch { expected: 2, got: 1 });
 
-    assert_err_kind(<(u8,)>::rlp_decode(&mut [0x01].as_slice()), ErrorKind::UnexpectedString);
+    assert_err_kind(decode::<(u8,)>([0x01]), ErrorKind::UnexpectedString);
 }
 
 #[test]
@@ -223,12 +224,12 @@ fn tuple_raw_decode_leaves_outer_fields() {
     (1u8, 2u8).rlp_encode_raw(&mut Encoder::new(&mut raw));
     3u8.rlp_encode(&mut Encoder::new(&mut raw));
 
-    let mut slice = raw.as_slice();
-    let tuple = <(u8, u8)>::rlp_decode_raw(&mut slice).unwrap();
-    let tail = u8::rlp_decode(&mut slice).unwrap();
+    let mut decoder = Decoder::new(&raw);
+    let tuple = <(u8, u8)>::rlp_decode_raw(&mut decoder).unwrap();
+    let tail = u8::rlp_decode(&mut decoder).unwrap();
     assert_eq!(tuple, (1, 2));
     assert_eq!(tail, 3);
-    assert!(slice.is_empty());
+    assert!(decoder.is_empty());
 }
 
 #[test]
@@ -267,7 +268,7 @@ fn flatten_nested_vs_flat_encoding() {
     let flat_encoded = alloy_rlp::encode(&flat);
     assert_ne!(nested_encoded, flat_encoded);
     assert_eq!(flat_encoded, alloy_rlp::encode(&equivalent));
-    assert_eq!(OuterFlat::rlp_decode(&mut flat_encoded.as_slice()).unwrap(), flat);
+    assert_eq!(decode::<OuterFlat>(&flat_encoded).unwrap(), flat);
 }
 
 #[test]
@@ -307,7 +308,7 @@ fn flatten_multiple_and_tuple_fields() {
 
     let encoded = alloy_rlp::encode(&value);
     assert_eq!(encoded, alloy_rlp::encode(&flat));
-    assert_eq!(Combined::rlp_decode(&mut encoded.as_slice()).unwrap(), value);
+    assert_eq!(decode::<Combined>(&encoded).unwrap(), value);
 }
 
 #[test]
@@ -341,7 +342,7 @@ fn flatten_with_skip_default_fields() {
     let encoded = alloy_rlp::encode(&value);
     assert_eq!(encoded, alloy_rlp::encode(&Flat { a: 1, b: 3 }));
 
-    let decoded = Outer::rlp_decode(&mut encoded.as_slice()).unwrap();
+    let decoded = decode::<Outer>(&encoded).unwrap();
     assert_eq!(decoded.inner.a, 1);
     assert_eq!(decoded.inner.cache, Cache::default());
     assert_eq!(decoded.b, 3);
@@ -359,7 +360,7 @@ fn trailing_optional_last_field_roundtrips_zero() {
 
     for value in [S { x: 1, y: None }, S { x: 1, y: Some(0) }, S { x: 1, y: Some(2) }] {
         let encoded = alloy_rlp::encode(&value);
-        assert_eq!(S::rlp_decode(&mut encoded.as_slice()).unwrap(), value);
+        assert_eq!(decode::<S>(&encoded).unwrap(), value);
     }
 }
 
@@ -370,6 +371,7 @@ fn flattened_trailing_options_do_not_consume_outer_fields() {
     struct Inner {
         a: u64,
         maybe: Option<u64>,
+        later: Option<u64>,
     }
 
     #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
@@ -382,15 +384,34 @@ fn flattened_trailing_options_do_not_consume_outer_fields() {
     #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
     struct Flat {
         a: u64,
+        maybe: u64,
+        later: u64,
         tail: u64,
     }
 
-    let value = Outer { inner: Inner { a: 1, maybe: Some(2) }, tail: 3 };
-    let encoded = alloy_rlp::encode(&value);
-    assert_eq!(encoded, alloy_rlp::encode(&Flat { a: 1, tail: 3 }));
+    #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
+    struct FlatWithoutLater {
+        a: u64,
+        maybe: u64,
+        tail: u64,
+    }
 
-    let decoded = Outer::rlp_decode(&mut encoded.as_slice()).unwrap();
-    assert_eq!(decoded, Outer { inner: Inner { a: 1, maybe: None }, tail: 3 });
+    let value = Outer { inner: Inner { a: 1, maybe: Some(2), later: Some(4) }, tail: 3 };
+    let encoded = alloy_rlp::encode(&value);
+    assert_eq!(encoded, alloy_rlp::encode(&Flat { a: 1, maybe: 2, later: 4, tail: 3 }));
+
+    let decoded = decode::<Outer>(&encoded).unwrap();
+    assert_eq!(decoded, value);
+
+    let zero_then_tail = Outer { inner: Inner { a: 1, maybe: Some(0), later: None }, tail: 3 };
+    let encoded = alloy_rlp::encode(&zero_then_tail);
+    assert_eq!(encoded, alloy_rlp::encode(&FlatWithoutLater { a: 1, maybe: 0, tail: 3 }));
+    assert_eq!(decode::<Outer>(&encoded).unwrap(), zero_then_tail);
+
+    let sentinel_then_some = Outer { inner: Inner { a: 1, maybe: None, later: Some(2) }, tail: 3 };
+    let encoded = alloy_rlp::encode(&sentinel_then_some);
+    assert_eq!(encoded, alloy_rlp::encode(&Flat { a: 1, maybe: 0, later: 2, tail: 3 }));
+    assert_eq!(decode::<Outer>(&encoded).unwrap(), sentinel_then_some);
 }
 
 #[test]
@@ -405,7 +426,7 @@ fn tagged_enum_roundtrips_shapes_and_tags() {
 
     for value in [Message::Ping, Message::Pong(1, 2), Message::Data { a: 3, b: 4 }] {
         let encoded = alloy_rlp::encode(&value);
-        assert_eq!(Message::rlp_decode(&mut encoded.as_slice()).unwrap(), value);
+        assert_eq!(decode::<Message>(&encoded).unwrap(), value);
     }
 
     #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
@@ -417,10 +438,7 @@ fn tagged_enum_roundtrips_shapes_and_tags() {
 
     assert_eq!(alloy_rlp::encode(&Discriminants::Start), alloy_rlp::encode((10u64,)));
     assert_eq!(alloy_rlp::encode(&Discriminants::Stop), alloy_rlp::encode((20u64,)));
-    assert_eq!(
-        Discriminants::rlp_decode(&mut alloy_rlp::encode((10u64,)).as_slice()).unwrap(),
-        Discriminants::Start
-    );
+    assert_eq!(decode::<Discriminants>(alloy_rlp::encode((10u64,))).unwrap(), Discriminants::Start);
 
     #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
     #[rlp(tagged)]
@@ -434,7 +452,7 @@ fn tagged_enum_roundtrips_shapes_and_tags() {
     assert_eq!(alloy_rlp::encode(&Custom::Alpha), alloy_rlp::encode((0x80u64,)));
     let beta = Custom::Beta(99);
     let encoded = alloy_rlp::encode(&beta);
-    assert_eq!(Custom::rlp_decode(&mut encoded.as_slice()).unwrap(), beta);
+    assert_eq!(decode::<Custom>(&encoded).unwrap(), beta);
 }
 
 #[test]
@@ -446,11 +464,11 @@ fn tagged_enum_rejects_unknown_tags_and_trailing_payload() {
     }
 
     assert_err_kind(
-        Command::rlp_decode(&mut alloy_rlp::encode((99u64,)).as_slice()),
+        decode::<Command>(alloy_rlp::encode((99u64,))),
         ErrorKind::Custom("unknown variant tag"),
     );
     assert_err_kind(
-        Command::rlp_decode(&mut alloy_rlp::encode((10u64, 1u8)).as_slice()),
+        decode::<Command>(alloy_rlp::encode((10u64, 1u8))),
         ErrorKind::ListLengthMismatch { expected: 0, got: 1 },
     );
 }
@@ -486,13 +504,10 @@ fn transparent_structs_encode_as_inner_field() {
         assert_eq!(encoded, alloy_rlp::encode(42u64));
     }
 
+    assert_eq!(decode::<Named>(alloy_rlp::encode(42u64)).unwrap(), Named { inner: 42 });
+    assert_eq!(decode::<Newtype>(alloy_rlp::encode(42u64)).unwrap(), Newtype(42));
     assert_eq!(
-        Named::rlp_decode(&mut alloy_rlp::encode(42u64).as_slice()).unwrap(),
-        Named { inner: 42 }
-    );
-    assert_eq!(Newtype::rlp_decode(&mut alloy_rlp::encode(42u64).as_slice()).unwrap(), Newtype(42));
-    assert_eq!(
-        WithSkip::rlp_decode(&mut alloy_rlp::encode(42u64).as_slice()).unwrap(),
+        decode::<WithSkip>(alloy_rlp::encode(42u64)).unwrap(),
         WithSkip { value: 42, marker: Marker }
     );
 }

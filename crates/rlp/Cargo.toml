@@ -28,6 +28,7 @@ arrayvec = { workspace = true, optional = true }
 [dev-dependencies]
 hex.workspace = true
 hex-literal.workspace = true
+trybuild = "1"
 
 [features]
 default = ["std"]

@@ -49,6 +49,7 @@ pub type DecodeError = ErrorKind;
 
 #[doc(hidden)]
 pub mod private {
+    pub use crate::decode::decode_optional_raw;
     pub use core::{
         default::Default,
         option::Option::{self, None, Some},

@@ -70,14 +70,26 @@ pub(crate) fn get_tag_value(attrs: &[Attribute]) -> Result<Option<syn::Expr>> {
 }
 
 pub(crate) fn is_optional(field: &Field) -> bool {
+    option_inner_type(field).is_some()
+}
+
+pub(crate) fn option_inner_type(field: &Field) -> Option<&syn::Type> {
     if let Type::Path(TypePath { qself, path }) = &field.ty {
-        qself.is_none()
+        if qself.is_none()
             && path.leading_colon.is_none()
             && path.segments.len() == 1
             && path.segments.first().unwrap().ident == "Option"
-    } else {
-        false
+        {
+            if let syn::PathArguments::AngleBracketed(args) =
+                &path.segments.first().unwrap().arguments
+            {
+                if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                    return Some(inner);
+                }
+            }
+        }
     }
+    None
 }
 
 pub(crate) fn field_ident(index: usize, field: &syn::Field) -> TokenStream {

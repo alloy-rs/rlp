@@ -1,0 +1,6 @@
+error: `#[rlp(flatten)]` cannot be used on `Option<T>` fields
+ --> tests/ui/flatten_option.rs:5:5
+  |
+5 | /     #[rlp(flatten)]
+6 | |     value: Option<u8>,
+  | |_____________________^

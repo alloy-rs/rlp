@@ -1,0 +1,5 @@
+error: `#[rlp(transparent)]` requires exactly one non-skipped field
+ --> tests/ui/transparent_invalid_shape.rs:5:8
+  |
+5 | struct Bad {
+  |        ^^^
