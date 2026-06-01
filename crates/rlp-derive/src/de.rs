@@ -44,12 +44,12 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
                 fn rlp_decode(b: &mut &[u8]) -> alloy_rlp::Result<Self> {
                     let alloy_rlp::Header { list, payload_length } = alloy_rlp::Header::decode(b)?;
                     if !list {
-                        return Err(alloy_rlp::ErrorKind::UnexpectedString);
+                        return Err(alloy_rlp::ErrorKind::UnexpectedString.into());
                     }
 
                     let started_len = b.len();
                     if started_len < payload_length {
-                        return Err(alloy_rlp::ErrorKind::InputTooShort);
+                        return Err(alloy_rlp::ErrorKind::InputTooShort.into());
                     }
 
                     let this = Self {
@@ -61,7 +61,7 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
                         return Err(alloy_rlp::ErrorKind::ListLengthMismatch {
                             expected: payload_length,
                             got: consumed,
-                        });
+                        }.into());
                     }
 
                     Ok(this)

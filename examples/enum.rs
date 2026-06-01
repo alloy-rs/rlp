@@ -1,7 +1,9 @@
 //! This example demonstrates how to encode and decode an enum using
 //! `alloy_rlp`.
 
-use alloy_rlp::{encode, encode_list, Encoder, ErrorKind, Header, RlpDecodable, RlpEncodable};
+use alloy_rlp::{
+    encode, encode_list, Encoder, Error, ErrorKind, Header, RlpDecodable, RlpEncodable,
+};
 
 #[derive(Debug, PartialEq)]
 enum FooBar {
@@ -25,12 +27,12 @@ impl RlpEncodable for FooBar {
 }
 
 impl RlpDecodable for FooBar {
-    fn rlp_decode(data: &mut &[u8]) -> Result<Self, ErrorKind> {
+    fn rlp_decode(data: &mut &[u8]) -> Result<Self, Error> {
         let mut payload = Header::decode_bytes(data, true)?;
         match u8::rlp_decode(&mut payload)? {
             0 => Ok(Self::Foo(u64::rlp_decode(&mut payload)?)),
             1 => Ok(Self::Bar(u16::rlp_decode(&mut payload)?, u64::rlp_decode(&mut payload)?)),
-            _ => Err(ErrorKind::Custom("unknown type")),
+            _ => Err(ErrorKind::Custom("unknown type").into()),
         }
     }
 }
