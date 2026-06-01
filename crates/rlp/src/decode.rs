@@ -471,6 +471,10 @@ where
 }
 
 /// Decodes a raw optional field without consuming items reserved for enclosing fields.
+///
+/// When another raw optional field follows, `0x80` is interpreted as the `None` gap sentinel.
+/// That byte is also the valid RLP encoding of values such as `0`, `false`, and empty strings, so
+/// those values are only unambiguous when no later optional raw field is present.
 #[doc(hidden)]
 #[inline]
 pub fn decode_optional_raw<'de, T: RlpDecodable<'de>>(

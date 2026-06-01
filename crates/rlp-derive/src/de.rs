@@ -331,10 +331,14 @@ pub(crate) fn impl_decodable_tagged(ast: &syn::DeriveInput) -> Result<TokenStrea
                 #[inline]
                 fn rlp_decode(decoder: &mut alloy_rlp::Decoder<'__alloy_rlp_de>) -> alloy_rlp::Result<Self> {
                     let mut payload = decoder.decode_payload(true)?;
+                    let tag_bytepos = payload.bytepos();
                     let tag = <u64 as alloy_rlp::RlpDecodable<'__alloy_rlp_de>>::rlp_decode(&mut payload)?;
                     let value = match tag {
                         #(#match_arms)*
-                        _ => alloy_rlp::private::Err(alloy_rlp::Error::from(alloy_rlp::ErrorKind::Custom("unknown variant tag"))),
+                        _ => alloy_rlp::private::Err(alloy_rlp::Error::with_bytepos(
+                            alloy_rlp::ErrorKind::Custom("unknown variant tag"),
+                            tag_bytepos,
+                        )),
                     }?;
                     if !payload.is_empty() {
                         return alloy_rlp::private::Err(payload.error(alloy_rlp::ErrorKind::ListLengthMismatch {

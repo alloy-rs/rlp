@@ -25,11 +25,20 @@ impl RlpEncodable for FooBar {
 impl<'de> RlpDecodable<'de> for FooBar {
     fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self, Error> {
         let mut payload = decoder.decode_payload(true)?;
-        match u8::rlp_decode(&mut payload)? {
-            0 => Ok(Self::Foo(u64::rlp_decode(&mut payload)?)),
-            1 => Ok(Self::Bar(u16::rlp_decode(&mut payload)?, u64::rlp_decode(&mut payload)?)),
-            _ => Err(ErrorKind::Custom("unknown type").into()),
+        let tag_bytepos = payload.bytepos();
+        let value = match u8::rlp_decode(&mut payload)? {
+            0 => Self::Foo(u64::rlp_decode(&mut payload)?),
+            1 => Self::Bar(u16::rlp_decode(&mut payload)?, u64::rlp_decode(&mut payload)?),
+            _ => return Err(payload.error_at(ErrorKind::Custom("unknown type"), tag_bytepos)),
+        };
+
+        if !payload.is_empty() {
+            return Err(
+                payload.error(ErrorKind::ListLengthMismatch { expected: 0, got: payload.len() })
+            );
         }
+
+        Ok(value)
     }
 }
 
@@ -41,6 +50,15 @@ fn main() {
     let val = FooBar::Bar(7, 42);
     let out = encode(&val);
     assert_eq!(alloy_rlp::decode_exact::<FooBar>(&out), Ok(val));
+
+    let unknown = encode((2u8,));
+    let err = alloy_rlp::decode_exact::<FooBar>(&unknown).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Custom("unknown type"));
+    assert_eq!(err.bytepos(), 1);
+
+    let trailing = encode((0u8, 42u64, 7u8));
+    let err = alloy_rlp::decode_exact::<FooBar>(&trailing).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::ListLengthMismatch { expected: 0, got: 1 });
 
     println!("success!")
 }

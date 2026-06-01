@@ -412,6 +412,14 @@ fn flattened_trailing_options_do_not_consume_outer_fields() {
     let encoded = alloy_rlp::encode(&sentinel_then_some);
     assert_eq!(encoded, alloy_rlp::encode(&Flat { a: 1, maybe: 0, later: 2, tail: 3 }));
     assert_eq!(decode::<Outer>(&encoded).unwrap(), sentinel_then_some);
+
+    // `None, Some(2)` and `Some(0), Some(2)` have the same raw bytes because `0x80` is both the
+    // gap sentinel and the RLP encoding of `0u64`. The bounded rule reserves following fields and
+    // treats this shape as the gap form.
+    let ambiguous_some_zero_then_some =
+        Outer { inner: Inner { a: 1, maybe: Some(0), later: Some(2) }, tail: 3 };
+    assert_eq!(alloy_rlp::encode(&ambiguous_some_zero_then_some), encoded);
+    assert_eq!(decode::<Outer>(&encoded).unwrap(), sentinel_then_some);
 }
 
 #[test]
@@ -471,6 +479,26 @@ fn tagged_enum_rejects_unknown_tags_and_trailing_payload() {
         decode::<Command>(alloy_rlp::encode((10u64, 1u8))),
         ErrorKind::ListLengthMismatch { expected: 0, got: 1 },
     );
+}
+
+#[test]
+fn tagged_enum_unknown_tag_reports_tag_bytepos() {
+    #[derive(RlpDecodable, PartialEq, Debug)]
+    #[rlp(tagged)]
+    enum Command {
+        Start = 10,
+    }
+
+    #[derive(RlpDecodable, PartialEq, Debug)]
+    struct Envelope {
+        first: u8,
+        command: Command,
+    }
+
+    let encoded = alloy_rlp::encode((7u8, (99u64,)));
+    let err = decode::<Envelope>(&encoded).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Custom("unknown variant tag"));
+    assert_eq!(err.bytepos(), 3);
 }
 
 #[test]
