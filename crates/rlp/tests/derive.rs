@@ -19,6 +19,27 @@ where
     alloy_rlp::decode_exact(bytes)
 }
 
+fn manual_list(fields: &[Vec<u8>]) -> Vec<u8> {
+    let payload_length = fields.iter().map(Vec::len).sum();
+    let mut out = Vec::new();
+    Header { list: true, payload_length }.encode(&mut Encoder::new(&mut out));
+    for field in fields {
+        out.extend_from_slice(field);
+    }
+    out
+}
+
+fn assert_manual_list_encoding<T>(value: &T, fields: &[Vec<u8>])
+where
+    T: RlpEncodable + for<'de> RlpDecodable<'de> + PartialEq + std::fmt::Debug,
+{
+    let encoded = alloy_rlp::encode(value);
+    assert_eq!(encoded, manual_list(fields));
+
+    let decoded = decode::<T>(&encoded).unwrap();
+    assert_eq!(&decoded, value);
+}
+
 #[test]
 fn simple_derive() {
     #[derive(RlpEncodable, RlpDecodable, RlpMaxEncodedLen, PartialEq, Debug)]
@@ -538,4 +559,211 @@ fn transparent_structs_encode_as_inner_field() {
         decode::<WithSkip>(alloy_rlp::encode(42u64)).unwrap(),
         WithSkip { value: 42, marker: Marker }
     );
+}
+
+#[test]
+fn reth_like_eth_payloads_match_manual_list_encoding() {
+    #[derive(RlpEncodable, RlpDecodable, Clone, PartialEq, Debug)]
+    struct BlockHashNumber {
+        hash: [u8; 32],
+        number: u64,
+    }
+
+    let block_hash_number = BlockHashNumber { hash: [0x11; 32], number: 17 };
+    assert_manual_list_encoding(
+        &block_hash_number,
+        &[alloy_rlp::encode(block_hash_number.hash), alloy_rlp::encode(block_hash_number.number)],
+    );
+
+    #[derive(RlpEncodable, RlpDecodable, Clone, PartialEq, Debug)]
+    struct LegacyTx {
+        nonce: u64,
+        gas_price: u128,
+        gas_limit: u64,
+        to: [u8; 20],
+        value: u128,
+        input: Bytes,
+        v: u64,
+        r: u128,
+        s: u128,
+    }
+
+    let tx = LegacyTx {
+        nonce: 7,
+        gas_price: 20_000_000_000,
+        gas_limit: 21_000,
+        to: [0x22; 20],
+        value: 1_000_000_000_000_000_000,
+        input: Bytes::from_static(b"call-data"),
+        v: 37,
+        r: 0x1234,
+        s: 0x5678,
+    };
+    assert_manual_list_encoding(
+        &tx,
+        &[
+            alloy_rlp::encode(tx.nonce),
+            alloy_rlp::encode(tx.gas_price),
+            alloy_rlp::encode(tx.gas_limit),
+            alloy_rlp::encode(tx.to),
+            alloy_rlp::encode(tx.value),
+            alloy_rlp::encode(&tx.input),
+            alloy_rlp::encode(tx.v),
+            alloy_rlp::encode(tx.r),
+            alloy_rlp::encode(tx.s),
+        ],
+    );
+
+    #[derive(RlpEncodable, RlpDecodable, Clone, PartialEq, Debug)]
+    struct MiniHeader {
+        parent_hash: [u8; 32],
+        ommers_hash: [u8; 32],
+        beneficiary: [u8; 20],
+        state_root: [u8; 32],
+        transactions_root: [u8; 32],
+        receipts_root: [u8; 32],
+        logs_bloom: Bytes,
+        difficulty: u128,
+        number: u64,
+        gas_limit: u64,
+        gas_used: u64,
+        timestamp: u64,
+        extra_data: Bytes,
+        mix_hash: [u8; 32],
+        nonce: [u8; 8],
+    }
+
+    let header = MiniHeader {
+        parent_hash: [0x01; 32],
+        ommers_hash: [0x02; 32],
+        beneficiary: [0x03; 20],
+        state_root: [0x04; 32],
+        transactions_root: [0x05; 32],
+        receipts_root: [0x06; 32],
+        logs_bloom: Bytes::from(vec![0xaa; 256]),
+        difficulty: 17_000_000,
+        number: 18_000_000,
+        gas_limit: 30_000_000,
+        gas_used: 12_345_678,
+        timestamp: 1_700_000_000,
+        extra_data: Bytes::from_static(b"alloy-rlp"),
+        mix_hash: [0x07; 32],
+        nonce: [0x08; 8],
+    };
+    assert_manual_list_encoding(
+        &header,
+        &[
+            alloy_rlp::encode(header.parent_hash),
+            alloy_rlp::encode(header.ommers_hash),
+            alloy_rlp::encode(header.beneficiary),
+            alloy_rlp::encode(header.state_root),
+            alloy_rlp::encode(header.transactions_root),
+            alloy_rlp::encode(header.receipts_root),
+            alloy_rlp::encode(&header.logs_bloom),
+            alloy_rlp::encode(header.difficulty),
+            alloy_rlp::encode(header.number),
+            alloy_rlp::encode(header.gas_limit),
+            alloy_rlp::encode(header.gas_used),
+            alloy_rlp::encode(header.timestamp),
+            alloy_rlp::encode(&header.extra_data),
+            alloy_rlp::encode(header.mix_hash),
+            alloy_rlp::encode(header.nonce),
+        ],
+    );
+
+    #[derive(RlpEncodable, RlpDecodable, Clone, PartialEq, Debug)]
+    struct MiniBlock {
+        header: MiniHeader,
+        transactions: Vec<LegacyTx>,
+        ommers: Vec<MiniHeader>,
+    }
+
+    let ommer = MiniHeader { nonce: [0x09; 8], ..header.clone() };
+    let block = MiniBlock { header, transactions: vec![tx.clone()], ommers: vec![ommer] };
+    assert_manual_list_encoding(
+        &block,
+        &[
+            alloy_rlp::encode(&block.header),
+            alloy_rlp::encode(&block.transactions),
+            alloy_rlp::encode(&block.ommers),
+        ],
+    );
+
+    #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
+    struct NewBlock {
+        block: MiniBlock,
+        td: u128,
+    }
+
+    let new_block = NewBlock { block, td: 19_000_000 };
+    assert_manual_list_encoding(
+        &new_block,
+        &[alloy_rlp::encode(&new_block.block), alloy_rlp::encode(new_block.td)],
+    );
+
+    #[derive(RlpEncodableWrapper, RlpDecodableWrapper, PartialEq, Debug)]
+    struct Transactions(Vec<LegacyTx>);
+
+    let transactions = Transactions(vec![tx]);
+    let encoded = alloy_rlp::encode(&transactions);
+    assert_eq!(encoded, alloy_rlp::encode(&transactions.0));
+    assert_eq!(decode::<Transactions>(&encoded).unwrap(), transactions);
+}
+
+#[test]
+fn reth_like_p2p_tagged_payloads_match_manual_list_encoding() {
+    #[derive(RlpEncodable, RlpDecodable, Clone, PartialEq, Debug)]
+    struct Capability {
+        name: String,
+        version: u64,
+    }
+
+    #[derive(RlpEncodable, RlpDecodable, Clone, PartialEq, Debug)]
+    struct HelloMessage {
+        protocol_version: u64,
+        client_version: String,
+        capabilities: Vec<Capability>,
+        port: u16,
+        id: [u8; 32],
+    }
+
+    let hello = HelloMessage {
+        protocol_version: 5,
+        client_version: "reth/v1.0.0".to_string(),
+        capabilities: vec![Capability { name: "eth".to_string(), version: 68 }],
+        port: 30303,
+        id: [0x42; 32],
+    };
+    assert_manual_list_encoding(
+        &hello,
+        &[
+            alloy_rlp::encode(hello.protocol_version),
+            alloy_rlp::encode(&hello.client_version),
+            alloy_rlp::encode(&hello.capabilities),
+            alloy_rlp::encode(hello.port),
+            alloy_rlp::encode(hello.id),
+        ],
+    );
+
+    #[derive(RlpEncodable, RlpDecodable, PartialEq, Debug)]
+    #[rlp(tagged)]
+    enum P2PControl {
+        Hello(HelloMessage),
+        Disconnect {
+            reason: u8,
+        },
+        #[rlp(tag = 2)]
+        Ping,
+        #[rlp(tag = 3)]
+        Pong,
+    }
+
+    let hello_msg = P2PControl::Hello(hello.clone());
+    assert_manual_list_encoding(&hello_msg, &[alloy_rlp::encode(0u64), alloy_rlp::encode(&hello)]);
+
+    let disconnect = P2PControl::Disconnect { reason: 8 };
+    assert_manual_list_encoding(&disconnect, &[alloy_rlp::encode(1u64), alloy_rlp::encode(8u8)]);
+
+    assert_manual_list_encoding(&P2PControl::Ping, &[alloy_rlp::encode(2u64)]);
+    assert_manual_list_encoding(&P2PControl::Pong, &[alloy_rlp::encode(3u64)]);
 }

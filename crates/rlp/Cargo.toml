@@ -28,7 +28,9 @@ arrayvec = { workspace = true, optional = true }
 [dev-dependencies]
 hex.workspace = true
 hex-literal.workspace = true
-trybuild = "1"
+# Keep exact for MSRV CI: newer trybuild releases pull TOML parser stacks whose
+# manifests or rust-version exceed this crate's rust-version.
+trybuild = "=1.0.80"
 
 [features]
 default = ["std"]
