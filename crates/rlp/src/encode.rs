@@ -47,6 +47,15 @@ pub trait RlpEncodable {
     /// Encodes the type into the `out` buffer.
     fn rlp_encode(&self, out: &mut Encoder<'_>);
 
+    /// Encodes this value without its outer RLP list header.
+    ///
+    /// The default implementation preserves the historical behavior by encoding the value normally.
+    /// Structured implementations may override this to emit their fields sequentially.
+    #[inline]
+    fn rlp_encode_raw(&self, out: &mut Encoder<'_>) {
+        self.rlp_encode(out);
+    }
+
     /// Returns the length of the encoding of this type in bytes.
     ///
     /// The default implementation computes this by encoding the type.
@@ -57,6 +66,15 @@ pub trait RlpEncodable {
         let mut out = Vec::new();
         self.rlp_encode(&mut Encoder::new(&mut out));
         out.len()
+    }
+
+    /// Returns the length of this value when encoded without its outer RLP list header.
+    ///
+    /// The default implementation preserves the historical behavior by returning the normal encoded
+    /// length. Structured implementations may override this to return only their payload length.
+    #[inline]
+    fn rlp_len_raw(&self) -> usize {
+        self.rlp_len()
     }
 }
 
@@ -237,6 +255,49 @@ impl<T: RlpEncodable> RlpEncodable for Vec<T> {
     }
 }
 
+macro_rules! tuple_impls {
+    ($(($($ty:ident $idx:tt),+)),+ $(,)?) => {$(
+        impl<$($ty: RlpEncodable),+> RlpEncodable for ($($ty,)+) {
+            #[inline]
+            fn rlp_len(&self) -> usize {
+                let payload_length = self.rlp_len_raw();
+                payload_length + length_of_length(payload_length)
+            }
+
+            #[inline]
+            fn rlp_encode(&self, out: &mut Encoder<'_>) {
+                Header { list: true, payload_length: self.rlp_len_raw() }.encode(out);
+                self.rlp_encode_raw(out);
+            }
+
+            #[inline]
+            fn rlp_encode_raw(&self, out: &mut Encoder<'_>) {
+                $(RlpEncodable::rlp_encode(&self.$idx, out);)+
+            }
+
+            #[inline]
+            fn rlp_len_raw(&self) -> usize {
+                0usize $(+ RlpEncodable::rlp_len(&self.$idx))+
+            }
+        }
+    )+};
+}
+
+tuple_impls! {
+    (A 0),
+    (A 0, B 1),
+    (A 0, B 1, C 2),
+    (A 0, B 1, C 2, D 3),
+    (A 0, B 1, C 2, D 3, E 4),
+    (A 0, B 1, C 2, D 3, E 4, F 5),
+    (A 0, B 1, C 2, D 3, E 4, F 5, G 6),
+    (A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7),
+    (A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8),
+    (A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9),
+    (A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9, K 10),
+    (A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9, K 10, L 11),
+}
+
 macro_rules! deref_impl {
     ($($(#[$attr:meta])* [$($gen:tt)*] $t:ty),+ $(,)?) => {$(
         $(#[$attr])*
@@ -249,6 +310,16 @@ macro_rules! deref_impl {
             #[inline]
             fn rlp_encode(&self, out: &mut Encoder<'_>) {
                 (**self).rlp_encode(out)
+            }
+
+            #[inline]
+            fn rlp_len_raw(&self) -> usize {
+                (**self).rlp_len_raw()
+            }
+
+            #[inline]
+            fn rlp_encode_raw(&self, out: &mut Encoder<'_>) {
+                (**self).rlp_encode_raw(out)
             }
         }
     )+};

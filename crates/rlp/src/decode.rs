@@ -1,4 +1,4 @@
-use crate::{ErrorKind, Header, Result};
+use crate::{Error, ErrorKind, Header, Result};
 use bytes::{Bytes, BytesMut};
 use core::marker::{PhantomData, PhantomPinned};
 
@@ -7,6 +7,154 @@ pub trait RlpDecodable: Sized {
     /// Decodes the blob into the appropriate type. `buf` must be advanced past
     /// the decoded object.
     fn rlp_decode(buf: &mut &[u8]) -> Result<Self>;
+
+    /// Decodes this value from a buffer that omits the value's outer RLP list header.
+    ///
+    /// The default implementation preserves the historical behavior by decoding the value normally.
+    /// Structured implementations may override this to read their fields sequentially.
+    #[inline]
+    fn rlp_decode_raw(buf: &mut &[u8]) -> Result<Self> {
+        Self::rlp_decode(buf)
+    }
+}
+
+/// An active RLP decoder that tracks byte position while advancing through an input buffer.
+#[derive(Clone, Debug)]
+pub struct Decoder<'de> {
+    buf: &'de [u8],
+    bytepos: usize,
+}
+
+impl<'de> Decoder<'de> {
+    /// Instantiate an RLP decoder with an input slice.
+    #[inline]
+    pub const fn new(buf: &'de [u8]) -> Self {
+        Self { buf, bytepos: 0 }
+    }
+
+    /// Instantiate an RLP decoder with an input slice and starting byte position.
+    #[inline]
+    pub const fn with_bytepos(buf: &'de [u8], bytepos: usize) -> Self {
+        Self { buf, bytepos }
+    }
+
+    /// Returns the remaining undecoded input.
+    #[inline]
+    pub const fn as_slice(&self) -> &'de [u8] {
+        self.buf
+    }
+
+    /// Returns true if the decoder has no remaining input.
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    /// Returns the current byte position.
+    #[inline]
+    pub const fn bytepos(&self) -> usize {
+        self.bytepos
+    }
+
+    /// Creates an error at the current byte position.
+    #[inline]
+    pub const fn error(&self, kind: ErrorKind) -> Error {
+        Error::with_bytepos(kind, self.bytepos)
+    }
+
+    /// Creates an error at the given byte position.
+    #[inline]
+    pub const fn error_at(&self, kind: ErrorKind, bytepos: usize) -> Error {
+        Error::with_bytepos(kind, bytepos)
+    }
+
+    /// Decodes the next RLP header, advancing past the header but not the payload.
+    #[inline]
+    pub fn decode_header(&mut self) -> Result<Header> {
+        let before = self.buf.len();
+        match Header::decode(&mut self.buf) {
+            Ok(header) => {
+                self.advance_bytepos(before);
+                Ok(header)
+            }
+            Err(err) => {
+                let err = self.map_error(before, err);
+                self.advance_bytepos(before);
+                Err(err)
+            }
+        }
+    }
+
+    /// Decodes the next payload from the buffer, advancing past the full item.
+    #[inline]
+    pub fn decode_bytes(&mut self, is_list: bool) -> Result<&'de [u8]> {
+        let item_start = self.bytepos;
+        let Header { list, payload_length } = self.decode_header()?;
+
+        if list != is_list {
+            return Err(Error::with_bytepos(
+                if is_list { ErrorKind::UnexpectedString } else { ErrorKind::UnexpectedList },
+                item_start,
+            ));
+        }
+
+        if self.buf.len() < payload_length {
+            return Err(self.error(ErrorKind::InputTooShort));
+        }
+
+        let (payload, rest) = self.buf.split_at(payload_length);
+        self.buf = rest;
+        self.bytepos = self.bytepos.saturating_add(payload_length);
+        Ok(payload)
+    }
+
+    /// Decodes a string slice from the buffer, advancing past the full item.
+    #[inline]
+    pub fn decode_str(&mut self) -> Result<&'de str> {
+        let item_start = self.bytepos;
+        let bytes = self.decode_bytes(false)?;
+        core::str::from_utf8(bytes)
+            .map_err(|_| Error::with_bytepos(ErrorKind::Custom("invalid string"), item_start))
+    }
+
+    /// Decodes the next item using [`RlpDecodable::rlp_decode`].
+    #[inline]
+    pub fn decode_next<T: RlpDecodable>(&mut self) -> Result<T> {
+        self.decode_with(T::rlp_decode)
+    }
+
+    /// Decodes the next item using [`RlpDecodable::rlp_decode_raw`].
+    #[inline]
+    pub fn decode_next_raw<T: RlpDecodable>(&mut self) -> Result<T> {
+        self.decode_with(T::rlp_decode_raw)
+    }
+
+    #[inline]
+    fn decode_with<T>(&mut self, f: impl FnOnce(&mut &'de [u8]) -> Result<T>) -> Result<T> {
+        let before = self.buf.len();
+        match f(&mut self.buf) {
+            Ok(value) => {
+                self.advance_bytepos(before);
+                Ok(value)
+            }
+            Err(err) => {
+                let err = self.map_error(before, err);
+                self.advance_bytepos(before);
+                Err(err)
+            }
+        }
+    }
+
+    #[inline]
+    fn advance_bytepos(&mut self, before: usize) {
+        self.bytepos = self.bytepos.saturating_add(before.saturating_sub(self.buf.len()));
+    }
+
+    #[inline]
+    const fn map_error(&self, before: usize, err: Error) -> Error {
+        let relative = before.saturating_sub(self.buf.len()).saturating_add(err.bytepos());
+        Error::with_bytepos(err.kind(), self.bytepos.saturating_add(relative))
+    }
 }
 
 /// An active RLP decoder, with a specific slice of a payload.
@@ -110,6 +258,51 @@ impl<T: RlpDecodable> RlpDecodable for alloc::vec::Vec<T> {
         }
         Ok(vec)
     }
+}
+
+macro_rules! tuple_impls {
+    ($(($($ty:ident),+)),+ $(,)?) => {$(
+        impl<$($ty: RlpDecodable),+> RlpDecodable for ($($ty,)+) {
+            #[inline]
+            fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
+                let mut payload = Header::decode_bytes(buf, true)?;
+                let started_len = payload.len();
+
+                let this = Self::rlp_decode_raw(&mut payload)?;
+
+                let consumed = started_len - payload.len();
+                if consumed != started_len {
+                    return Err(ErrorKind::ListLengthMismatch {
+                        expected: started_len,
+                        got: consumed,
+                    }
+                    .into());
+                }
+
+                Ok(this)
+            }
+
+            #[inline]
+            fn rlp_decode_raw(buf: &mut &[u8]) -> Result<Self> {
+                Ok(($(<$ty as RlpDecodable>::rlp_decode(buf)?,)+))
+            }
+        }
+    )+};
+}
+
+tuple_impls! {
+    (A),
+    (A, B),
+    (A, B, C),
+    (A, B, C, D),
+    (A, B, C, D, E),
+    (A, B, C, D, E, F),
+    (A, B, C, D, E, F, G),
+    (A, B, C, D, E, F, G, H),
+    (A, B, C, D, E, F, G, H, I),
+    (A, B, C, D, E, F, G, H, I, J),
+    (A, B, C, D, E, F, G, H, I, J, K),
+    (A, B, C, D, E, F, G, H, I, J, K, L),
 }
 
 macro_rules! wrap_impl {
@@ -399,5 +592,49 @@ mod tests {
         check_decode_exact::<String>("test1234".into());
         check_decode_exact::<Vec<u64>>(vec![]);
         check_decode_exact::<Vec<u64>>(vec![0; 4]);
+    }
+
+    #[test]
+    fn decoder_advances_bytepos() {
+        let mut input = Vec::new();
+        1u8.rlp_encode(&mut crate::Encoder::new(&mut input));
+        "cat".rlp_encode(&mut crate::Encoder::new(&mut input));
+
+        let mut decoder = Decoder::new(&input);
+        assert_eq!(decoder.decode_next::<u8>(), Ok(1));
+        assert_eq!(decoder.bytepos(), 1);
+        assert_eq!(decoder.decode_str(), Ok("cat"));
+        assert_eq!(decoder.bytepos(), input.len());
+        assert!(decoder.is_empty());
+    }
+
+    #[test]
+    fn decoder_reports_error_bytepos() {
+        let input = [0x01, 0xC0];
+        let mut decoder = Decoder::new(&input);
+        assert_eq!(decoder.decode_next::<u8>(), Ok(1));
+        let err = decoder.decode_bytes(false).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::UnexpectedList);
+        assert_eq!(err.bytepos(), 1);
+
+        let input = [0x01, 0x82];
+        let mut decoder = Decoder::new(&input);
+        assert_eq!(decoder.decode_next::<u8>(), Ok(1));
+        let err = decoder.decode_next::<u16>().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InputTooShort);
+        assert_eq!(err.bytepos(), 2);
+    }
+
+    #[test]
+    fn decoder_decode_next_raw() {
+        let mut input = Vec::new();
+        (1u8, 2u8).rlp_encode_raw(&mut crate::Encoder::new(&mut input));
+        3u8.rlp_encode(&mut crate::Encoder::new(&mut input));
+
+        let mut decoder = Decoder::new(&input);
+        assert_eq!(decoder.decode_next_raw::<(u8, u8)>(), Ok((1, 2)));
+        assert_eq!(decoder.bytepos(), 2);
+        assert_eq!(decoder.decode_next::<u8>(), Ok(3));
+        assert!(decoder.is_empty());
     }
 }

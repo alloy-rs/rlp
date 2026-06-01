@@ -1,8 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-    parse_quote, Attribute, DataStruct, Error, Field, GenericParam, Generics, Meta, Result, Type,
-    TypePath,
+    parse_quote, Attribute, DataEnum, DataStruct, Error, Field, GenericParam, Generics, Meta,
+    Result, Type, TypePath,
 };
 
 pub(crate) const EMPTY_STRING_CODE: u8 = 0x80;
@@ -17,6 +17,17 @@ pub(crate) fn parse_struct<'a>(
         Err(Error::new_spanned(
             ast,
             format!("#[derive({derive_attr})] is only defined for structs."),
+        ))
+    }
+}
+
+pub(crate) fn parse_enum<'a>(ast: &'a syn::DeriveInput, derive_attr: &str) -> Result<&'a DataEnum> {
+    if let syn::Data::Enum(e) = &ast.data {
+        Ok(e)
+    } else {
+        Err(Error::new_spanned(
+            ast,
+            format!("#[derive({derive_attr})] with `#[rlp(tagged)]` is only defined for enums."),
         ))
     }
 }
@@ -39,6 +50,23 @@ pub(crate) fn attributes_include(attrs: &[Attribute], attr_name: &str) -> bool {
         }
     }
     false
+}
+
+pub(crate) fn get_tag_value(attrs: &[Attribute]) -> Result<Option<syn::Expr>> {
+    let mut value = None;
+    for attr in attrs {
+        if attr.path().is_ident("rlp") {
+            if let Meta::List(meta) = &attr.meta {
+                meta.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("tag") {
+                        value = Some(meta.value()?.parse()?);
+                    }
+                    Ok(())
+                })?;
+            }
+        }
+    }
+    Ok(value)
 }
 
 pub(crate) fn is_optional(field: &Field) -> bool {

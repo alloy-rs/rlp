@@ -36,3 +36,35 @@ let decoded = MyStruct::rlp_decode(&mut buffer.as_slice()).unwrap();
 assert_eq!(my_struct, decoded);
 # }
 ```
+
+The derive macros reject ambiguous enum and flatten shapes:
+
+```compile_fail
+use alloy_rlp::{RlpDecodable, RlpEncodable};
+
+#[derive(RlpEncodable, RlpDecodable)]
+enum NotTagged {
+    A,
+}
+```
+
+```compile_fail
+use alloy_rlp::{RlpDecodable, RlpEncodable};
+
+#[derive(RlpEncodable, RlpDecodable)]
+struct BadFlatten {
+    #[rlp(flatten)]
+    field: Option<u64>,
+}
+```
+
+```compile_fail
+use alloy_rlp::{RlpDecodable, RlpEncodable};
+
+#[derive(RlpEncodable, RlpDecodable)]
+#[rlp(transparent)]
+struct BadTransparent {
+    a: u64,
+    b: u64,
+}
+```
