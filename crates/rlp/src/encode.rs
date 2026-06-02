@@ -17,6 +17,24 @@ pub trait Encodable {
     /// Encodes the type into the `out` buffer.
     fn encode(&self, out: &mut dyn BufMut);
 
+    /// Encodes the type into a fixed-size [`ArrayVec`].
+    #[cfg(feature = "arrayvec")]
+    #[inline]
+    fn encode_fixed_size_to<const LEN: usize>(&self, out: &mut ArrayVec<u8, LEN>)
+    where
+        Self: MaxEncodedLen<LEN> + Sized,
+    {
+        // SAFETY: We're casting uninitialized memory to a slice of bytes to be written into.
+        let mut buf = unsafe {
+            core::slice::from_raw_parts_mut(out.as_mut_ptr().add(out.len()), LEN - out.len())
+        };
+        self.encode(&mut buf);
+        let written = LEN - out.len() - buf.len();
+
+        // SAFETY: `written <= out.capacity() - out.len()` and all bytes are initialized.
+        unsafe { out.set_len(out.len() + written) };
+    }
+
     /// Returns the length of the encoding of this type in bytes.
     ///
     /// The default implementation computes this by encoding the type.
@@ -332,14 +350,7 @@ pub fn encode<T: Encodable>(value: T) -> Vec<u8> {
 #[inline]
 pub fn encode_fixed_size<T: MaxEncodedLen<LEN>, const LEN: usize>(value: &T) -> ArrayVec<u8, LEN> {
     let mut vec = ArrayVec::<u8, LEN>::new();
-
-    // SAFETY: We're casting uninitalized memory to a slice of bytes to be written into.
-    let mut out = unsafe { core::slice::from_raw_parts_mut(vec.as_mut_ptr(), LEN) };
-    value.encode(&mut out);
-    let written = LEN - out.len();
-
-    // SAFETY: `written <= LEN` and all bytes are initialized.
-    unsafe { vec.set_len(written) };
+    value.encode_fixed_size_to(&mut vec);
     vec
 }
 
@@ -503,7 +514,17 @@ mod tests {
             for (input, output) in $fixtures {
                 assert_eq!(encode(input), output, "encode({input})");
                 #[cfg(feature = "arrayvec")]
-                assert_eq!(&encode_fixed_size(&input)[..], output, "encode_fixed_size({input})");
+                {
+                    assert_eq!(
+                        &encode_fixed_size(&input)[..],
+                        output,
+                        "encode_fixed_size({input})"
+                    );
+
+                    let mut out = ArrayVec::new();
+                    input.encode_fixed_size_to(&mut out);
+                    assert_eq!(&out[..], output, "encode_fixed_size_to({input})");
+                }
             }
         };
     }
