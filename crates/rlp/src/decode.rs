@@ -1,6 +1,11 @@
 use crate::{Error, ErrorKind, Header, Result};
 use bytes::{Bytes, BytesMut};
-use core::marker::{PhantomData, PhantomPinned};
+use core::{
+    marker::{PhantomData, PhantomPinned},
+    num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize},
+};
+
+const NON_ZERO_INTEGER_ERROR: &str = "non-zero integer cannot be zero";
 
 /// A type that can be decoded from an RLP blob.
 pub trait RlpDecodable<'de>: Sized {
@@ -287,6 +292,31 @@ macro_rules! decode_integer {
 
 decode_integer!(u8, u16, u32, u64, usize, u128);
 
+macro_rules! decode_nonzero_integer {
+    ($($t:ty => $inner:ty),+ $(,)?) => {$(
+        impl<'de> RlpDecodable<'de> for $t {
+            #[inline]
+            fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+                let bytepos = decoder.bytepos();
+                <$inner>::rlp_decode(decoder).and_then(|value| {
+                    <$t>::new(value).ok_or_else(|| {
+                        Error::with_bytepos(ErrorKind::Custom(NON_ZERO_INTEGER_ERROR), bytepos)
+                    })
+                })
+            }
+        }
+    )+};
+}
+
+decode_nonzero_integer! {
+    NonZeroU8 => u8,
+    NonZeroU16 => u16,
+    NonZeroU32 => u32,
+    NonZeroU64 => u64,
+    NonZeroUsize => usize,
+    NonZeroU128 => u128,
+}
+
 impl<'de> RlpDecodable<'de> for Bytes {
     #[inline]
     fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
@@ -311,13 +341,27 @@ impl<'de> RlpDecodable<'de> for alloc::string::String {
 impl<'de, T: RlpDecodable<'de>> RlpDecodable<'de> for alloc::vec::Vec<T> {
     #[inline]
     fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
-        let mut payload = decoder.decode_payload(true)?;
         let mut vec = Self::new();
-        while !payload.is_empty() {
-            vec.push(T::rlp_decode(&mut payload)?);
-        }
+        decode_append(decoder, &mut vec)?;
         Ok(vec)
     }
+}
+
+/// Decodes an RLP list and appends each item to the provided vector.
+///
+/// # Errors
+///
+/// Returns an error if the input is not a valid RLP list or any item fails to decode.
+#[inline]
+pub fn decode_append<'de, T: RlpDecodable<'de>>(
+    decoder: &mut Decoder<'de>,
+    out: &mut alloc::vec::Vec<T>,
+) -> Result<()> {
+    let mut payload = decoder.decode_payload(true)?;
+    while !payload.is_empty() {
+        out.push(T::rlp_decode(&mut payload)?);
+    }
+    Ok(())
 }
 
 macro_rules! tuple_impls {
@@ -528,7 +572,10 @@ pub(crate) fn static_left_pad<const N: usize>(data: &[u8]) -> Result<[u8; N]> {
 mod tests {
     use super::*;
     use crate::{encode, Error, RlpEncodable};
-    use core::fmt::Debug;
+    use core::{
+        fmt::Debug,
+        num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize},
+    };
     use hex_literal::hex;
 
     #[allow(unused_imports)]
@@ -628,11 +675,44 @@ mod tests {
     }
 
     #[test]
+    fn rlp_nonzero_uints() {
+        check_decode([(Ok(NonZeroU8::new(9).unwrap()), &hex!("09")[..])]);
+        check_decode([(Ok(NonZeroU16::new(0x0505).unwrap()), &hex!("820505")[..])]);
+        check_decode([(Ok(NonZeroU32::new(0xCE0505).unwrap()), &hex!("83CE0505")[..])]);
+        check_decode([(Ok(NonZeroU64::new(0xCE05050505).unwrap()), &hex!("85CE05050505")[..])]);
+        check_decode([(Ok(NonZeroUsize::new(0x80).unwrap()), &hex!("8180")[..])]);
+        check_decode([(
+            Ok(NonZeroU128::new(0x10203E405060708090A0B0C0D0E0F2).unwrap()),
+            &hex!("8f10203e405060708090a0b0c0d0e0f2")[..],
+        )]);
+        check_decode::<NonZeroU8, _>([(
+            Err(err_at(ErrorKind::Custom(NON_ZERO_INTEGER_ERROR), 0)),
+            &hex!("80")[..],
+        )]);
+        check_decode::<NonZeroU8, _>([(Err(err(ErrorKind::LeadingZero)), &hex!("00")[..])]);
+    }
+
+    #[test]
     fn rlp_vectors() {
         check_decode::<Vec<u64>, _>([
             (Ok(vec![]), &hex!("C0")[..]),
             (Ok(vec![0xBBCCB5_u64, 0xFFC0B5_u64]), &hex!("C883BBCCB583FFC0B5")[..]),
         ])
+    }
+
+    #[test]
+    fn rlp_decode_append_appends_to_existing_vec() {
+        let input = hex!("C883BBCCB583FFC0B5");
+        let mut decoder = Decoder::new(&input);
+        let mut values = Vec::with_capacity(4);
+        values.push(0x01);
+        let capacity = values.capacity();
+
+        decode_append::<u64>(&mut decoder, &mut values).unwrap();
+
+        assert!(decoder.is_empty());
+        assert_eq!(values, vec![0x01, 0xBBCCB5_u64, 0xFFC0B5_u64]);
+        assert_eq!(values.capacity(), capacity);
     }
 
     #[cfg(feature = "std")]

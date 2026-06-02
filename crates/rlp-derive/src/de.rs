@@ -1,6 +1,6 @@
 use crate::utils::{
     attributes_include, field_ident, get_tag_value, is_optional, make_generics, option_inner_type,
-    parse_enum, parse_struct, EMPTY_STRING_CODE,
+    parse_enum, parse_struct, parse_trailing_opts, TrailingOpts, EMPTY_STRING_CODE,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -23,7 +23,7 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
 
     let all_fields: Vec<_> = body.fields.iter().enumerate().collect();
 
-    let supports_trailing_opt = attributes_include(&ast.attrs, "trailing");
+    let trailing_opts = parse_trailing_opts(&ast.attrs);
 
     let last_consuming_idx = all_fields
         .iter()
@@ -38,6 +38,7 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
     let mut decode_stmts = Vec::with_capacity(body.fields.len());
     let mut decode_stmts_raw = Vec::with_capacity(body.fields.len());
     let mut min_raw_item_exprs = Vec::with_capacity(body.fields.len());
+    let mut canonical_assert_types = Vec::new();
     for &(i, field) in &all_fields {
         let is_flatten = attributes_include(&field.attrs, "flatten");
         if is_flatten && is_optional(field) {
@@ -47,11 +48,16 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
 
         let is_opt = is_optional(field);
         if is_opt {
-            if !supports_trailing_opt {
+            if !trailing_opts.enabled {
                 let msg = "optional fields are disabled.\nAdd the `#[rlp(trailing)]` attribute to the struct in order to enable optional fields";
                 return Err(Error::new_spanned(field, msg));
             }
             encountered_opt_item = true;
+            if trailing_opts.canonical {
+                if let Some(inner_ty) = option_inner_type(field) {
+                    canonical_assert_types.push(inner_ty.clone());
+                }
+            }
         } else if encountered_opt_item && !attributes_include(&field.attrs, "default") {
             let msg =
                 "all the fields after the first optional field must be either optional or default";
@@ -60,8 +66,15 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
 
         let tail_items = min_raw_items_from(all_fields.iter().copied().filter(|(j, _)| *j > i));
         let is_last_consuming = last_consuming_idx == Some(i);
-        decode_stmts.push(decodable_field(i, field, is_opt, is_last_consuming, &tail_items));
-        decode_stmts_raw.push(decodable_field_raw(i, field, &tail_items));
+        decode_stmts.push(decodable_field(
+            i,
+            field,
+            is_opt,
+            trailing_opts,
+            is_last_consuming,
+            &tail_items,
+        ));
+        decode_stmts_raw.push(decodable_field_raw(i, field, trailing_opts, &tail_items));
         if let Some(expr) = min_raw_items_field(field) {
             min_raw_item_exprs.push(expr);
         }
@@ -72,6 +85,26 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
     let (impl_generics, _, where_clause) = generics.split_for_impl();
     let (_, ty_generics, _) = ast.generics.split_for_impl();
 
+    let strict_asserts = canonical_assert_types.iter().map(|ty| {
+        let msg = format!(
+            "trailing(canonical): `Option<{}>` is not supported because `{}` decodes successfully from 0x80 (the None placeholder). \
+             Use a type whose RLP encoding is never 0x80.",
+            quote!(#ty), quote!(#ty),
+        );
+        quote! {
+            debug_assert!(
+                {
+                    let __alloy_rlp_bytes: &'__alloy_rlp_de [u8] = &[#EMPTY_STRING_CODE];
+                    let mut __alloy_rlp_decoder = alloy_rlp::Decoder::new(__alloy_rlp_bytes);
+                    let __alloy_rlp_result: alloy_rlp::Result<#ty> =
+                        alloy_rlp::RlpDecodable::rlp_decode(&mut __alloy_rlp_decoder);
+                    __alloy_rlp_result.is_err()
+                },
+                #msg,
+            );
+        }
+    });
+
     Ok(quote! {
         const _: () = {
             extern crate alloy_rlp;
@@ -81,6 +114,7 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
 
                 #[inline]
                 fn rlp_decode(decoder: &mut alloy_rlp::Decoder<'__alloy_rlp_de>) -> alloy_rlp::Result<Self> {
+                    #(#strict_asserts)*
                     let mut b = decoder.decode_payload(true)?;
                     let started_len = b.len();
 
@@ -226,6 +260,7 @@ fn decodable_field(
     index: usize,
     field: &syn::Field,
     is_opt: bool,
+    trailing_opts: TrailingOpts,
     is_last_consuming: bool,
     tail_items: &TokenStream,
 ) -> TokenStream {
@@ -234,7 +269,30 @@ fn decodable_field(
     if attributes_include(&field.attrs, "default") || attributes_include(&field.attrs, "skip") {
         quote! { #ident: alloy_rlp::private::Default::default(), }
     } else if is_opt {
-        if is_last_consuming {
+        if trailing_opts.no_gaps {
+            // no_gaps: no 0x80 sentinel logic; just decode if there's remaining payload.
+            quote! {
+                #ident: if !b.is_empty() {
+                    Some(alloy_rlp::RlpDecodable::rlp_decode(&mut b)?)
+                } else {
+                    None
+                },
+            }
+        } else if trailing_opts.canonical {
+            // canonical: 0x80 is a None placeholder only when another payload byte follows it.
+            quote! {
+                #ident: if !b.is_empty() {
+                    if b.peek() == Some(#EMPTY_STRING_CODE) && b.len() > 1 {
+                        b.advance(1)?;
+                        None
+                    } else {
+                        Some(alloy_rlp::RlpDecodable::rlp_decode(&mut b)?)
+                    }
+                } else {
+                    None
+                },
+            }
+        } else if is_last_consuming {
             quote! {
                 #ident: if !b.is_empty() {
                     Some(alloy_rlp::RlpDecodable::rlp_decode(&mut b)?)
@@ -268,14 +326,32 @@ fn decodable_field(
     }
 }
 
-fn decodable_field_raw(index: usize, field: &syn::Field, tail_items: &TokenStream) -> TokenStream {
+fn decodable_field_raw(
+    index: usize,
+    field: &syn::Field,
+    trailing_opts: TrailingOpts,
+    tail_items: &TokenStream,
+) -> TokenStream {
     let ident = field_ident(index, field);
 
     if attributes_include(&field.attrs, "default") || attributes_include(&field.attrs, "skip") {
         quote! { #ident: alloy_rlp::private::Default::default(), }
     } else if is_optional(field) {
         let inner_ty = option_inner_type(field).expect("checked optional field");
-        quote! { #ident: alloy_rlp::private::decode_optional_raw::<#inner_ty>(b, #tail_items)?, }
+        if trailing_opts.no_gaps {
+            quote! {
+                #ident: {
+                    let reserved_items = b.raw_tail_items().saturating_add(#tail_items);
+                    if b.remaining_rlp_items()? <= reserved_items {
+                        None
+                    } else {
+                        Some(alloy_rlp::RlpDecodable::rlp_decode(b)?)
+                    }
+                },
+            }
+        } else {
+            quote! { #ident: alloy_rlp::private::decode_optional_raw::<#inner_ty>(b, #tail_items)?, }
+        }
     } else if attributes_include(&field.attrs, "flatten") {
         quote! {
             #ident: {

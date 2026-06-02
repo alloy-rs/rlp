@@ -5,6 +5,40 @@ use syn::{
     Result, Type, TypePath,
 };
 
+#[derive(Default, Clone, Copy)]
+pub(crate) struct TrailingOpts {
+    pub enabled: bool,
+    pub no_gaps: bool,
+    pub canonical: bool,
+}
+
+pub(crate) fn parse_trailing_opts(attrs: &[Attribute]) -> TrailingOpts {
+    let mut opts = TrailingOpts::default();
+    for attr in attrs {
+        if attr.path().is_ident("rlp") {
+            if let Meta::List(meta) = &attr.meta {
+                let _ = meta.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("trailing") {
+                        opts.enabled = true;
+                        if meta.input.peek(syn::token::Paren) {
+                            meta.parse_nested_meta(|inner| {
+                                if inner.path.is_ident("no_gaps") {
+                                    opts.no_gaps = true;
+                                } else if inner.path.is_ident("canonical") {
+                                    opts.canonical = true;
+                                }
+                                Ok(())
+                            })?;
+                        }
+                    }
+                    Ok(())
+                });
+            }
+        }
+    }
+    opts
+}
+
 pub(crate) const EMPTY_STRING_CODE: u8 = 0x80;
 
 pub(crate) fn parse_struct<'a>(
@@ -73,6 +107,8 @@ pub(crate) fn is_optional(field: &Field) -> bool {
     option_inner_type(field).is_some()
 }
 
+/// Extracts the inner type `T` from an `Option<T>` field, or returns `None` if the field is not
+/// an `Option`.
 pub(crate) fn option_inner_type(field: &Field) -> Option<&syn::Type> {
     if let Type::Path(TypePath { qself, path }) = &field.ty {
         if qself.is_none()
