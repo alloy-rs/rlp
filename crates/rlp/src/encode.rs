@@ -20,16 +20,16 @@ pub trait Encodable {
     /// Encodes the type into a fixed-size [`ArrayVec`].
     #[cfg(feature = "arrayvec")]
     #[inline]
-    fn encode_fixed_size_to<const LEN: usize>(&self, out: &mut ArrayVec<u8, LEN>)
+    fn encode_fixed_size_to<const N: usize>(&self, out: &mut ArrayVec<u8, N>)
     where
-        Self: MaxEncodedLen<LEN> + Sized,
+        Self: Sized,
     {
         // SAFETY: We're casting uninitialized memory to a slice of bytes to be written into.
         let mut buf = unsafe {
-            core::slice::from_raw_parts_mut(out.as_mut_ptr().add(out.len()), LEN - out.len())
+            core::slice::from_raw_parts_mut(out.as_mut_ptr().add(out.len()), N - out.len())
         };
         self.encode(&mut buf);
-        let written = LEN - out.len() - buf.len();
+        let written = N - out.len() - buf.len();
 
         // SAFETY: `written <= out.capacity() - out.len()` and all bytes are initialized.
         unsafe { out.set_len(out.len() + written) };
@@ -521,7 +521,7 @@ mod tests {
                         "encode_fixed_size({input})"
                     );
 
-                    let mut out = ArrayVec::new();
+                    let mut out = ArrayVec::<u8, 32>::new();
                     input.encode_fixed_size_to(&mut out);
                     assert_eq!(&out[..], output, "encode_fixed_size_to({input})");
                 }
@@ -538,6 +538,14 @@ mod tests {
         uint_rlp_test!(u128_fixtures());
         // #[cfg(feature = "ethnum")]
         // uint_rlp_test!(u256_fixtures());
+    }
+
+    #[cfg(feature = "arrayvec")]
+    #[test]
+    fn encode_fixed_size_to_accepts_larger_capacity() {
+        let mut out = ArrayVec::<u8, 8>::new();
+        0x80u8.encode_fixed_size_to(&mut out);
+        assert_eq!(&out[..], hex!("8180"));
     }
 
     #[test]
