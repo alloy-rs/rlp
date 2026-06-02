@@ -1,0 +1,7 @@
+error[E0046]: not all trait items implemented, missing: `rlp_len_raw`
+ --> tests/ui/missing_rlp_len_raw.rs:5:1
+  |
+5 | impl RlpEncodable for Bad {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^ missing `rlp_len_raw` in implementation
+  |
+  = help: implement the missing item: `fn rlp_len_raw(&self) -> usize { todo!() }`

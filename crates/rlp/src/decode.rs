@@ -3,18 +3,18 @@ use bytes::{Bytes, BytesMut};
 use core::marker::{PhantomData, PhantomPinned};
 
 /// A type that can be decoded from an RLP blob.
-pub trait RlpDecodable: Sized {
-    /// Decodes the blob into the appropriate type. `buf` must be advanced past
+pub trait RlpDecodable<'de>: Sized {
+    /// Minimum number of raw RLP items this type needs to decode successfully.
+    const MIN_RAW_ITEMS: usize = 1;
+
+    /// Decodes the blob into the appropriate type. `decoder` must be advanced past
     /// the decoded object.
-    fn rlp_decode(buf: &mut &[u8]) -> Result<Self>;
+    fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self>;
 
     /// Decodes this value from a buffer that omits the value's outer RLP list header.
-    ///
-    /// The default implementation preserves the historical behavior by decoding the value normally.
-    /// Structured implementations may override this to read their fields sequentially.
     #[inline]
-    fn rlp_decode_raw(buf: &mut &[u8]) -> Result<Self> {
-        Self::rlp_decode(buf)
+    fn rlp_decode_raw(decoder: &mut Decoder<'de>) -> Result<Self> {
+        Self::rlp_decode(decoder)
     }
 }
 
@@ -23,19 +23,20 @@ pub trait RlpDecodable: Sized {
 pub struct Decoder<'de> {
     buf: &'de [u8],
     bytepos: usize,
+    raw_tail_items: usize,
 }
 
 impl<'de> Decoder<'de> {
     /// Instantiate an RLP decoder with an input slice.
     #[inline]
     pub const fn new(buf: &'de [u8]) -> Self {
-        Self { buf, bytepos: 0 }
+        Self { buf, bytepos: 0, raw_tail_items: 0 }
     }
 
     /// Instantiate an RLP decoder with an input slice and starting byte position.
     #[inline]
     pub const fn with_bytepos(buf: &'de [u8], bytepos: usize) -> Self {
-        Self { buf, bytepos }
+        Self { buf, bytepos, raw_tail_items: 0 }
     }
 
     /// Returns the remaining undecoded input.
@@ -50,10 +51,42 @@ impl<'de> Decoder<'de> {
         self.buf.is_empty()
     }
 
+    /// Returns the number of remaining undecoded bytes.
+    #[inline]
+    pub const fn len(&self) -> usize {
+        self.buf.len()
+    }
+
     /// Returns the current byte position.
     #[inline]
     pub const fn bytepos(&self) -> usize {
         self.bytepos
+    }
+
+    /// Returns the raw item count reserved for enclosing flattened fields.
+    #[inline]
+    pub const fn raw_tail_items(&self) -> usize {
+        self.raw_tail_items
+    }
+
+    /// Temporarily sets the raw item count reserved for enclosing flattened fields.
+    #[inline]
+    pub fn with_raw_tail_items<R>(
+        &mut self,
+        raw_tail_items: usize,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = self.raw_tail_items;
+        self.raw_tail_items = raw_tail_items;
+        let result = f(self);
+        self.raw_tail_items = previous;
+        result
+    }
+
+    /// Returns the next undecoded byte without advancing.
+    #[inline]
+    pub fn peek(&self) -> Option<u8> {
+        self.buf.first().copied()
     }
 
     /// Creates an error at the current byte position.
@@ -72,22 +105,38 @@ impl<'de> Decoder<'de> {
     #[inline]
     pub fn decode_header(&mut self) -> Result<Header> {
         let before = self.buf.len();
-        match Header::decode(&mut self.buf) {
+        match Header::decode_at(&mut self.buf, self.bytepos) {
             Ok(header) => {
                 self.advance_bytepos(before);
                 Ok(header)
             }
             Err(err) => {
-                let err = self.map_error(before, err);
                 self.advance_bytepos(before);
                 Err(err)
             }
         }
     }
 
+    /// Advances by `cnt` bytes and returns the advanced-over slice.
+    #[inline]
+    pub fn advance(&mut self, cnt: usize) -> Result<&'de [u8]> {
+        if self.buf.len() < cnt {
+            return Err(self.error(ErrorKind::InputTooShort));
+        }
+        let (bytes, rest) = self.buf.split_at(cnt);
+        self.buf = rest;
+        self.bytepos = self.bytepos.saturating_add(cnt);
+        Ok(bytes)
+    }
+
     /// Decodes the next payload from the buffer, advancing past the full item.
     #[inline]
     pub fn decode_bytes(&mut self, is_list: bool) -> Result<&'de [u8]> {
+        self.decode_bytes_with_position(is_list).map(|(bytes, _)| bytes)
+    }
+
+    #[inline]
+    fn decode_bytes_with_position(&mut self, is_list: bool) -> Result<(&'de [u8], usize)> {
         let item_start = self.bytepos;
         let Header { list, payload_length } = self.decode_header()?;
 
@@ -98,127 +147,139 @@ impl<'de> Decoder<'de> {
             ));
         }
 
-        if self.buf.len() < payload_length {
-            return Err(self.error(ErrorKind::InputTooShort));
-        }
+        let payload_start = self.bytepos;
+        self.advance(payload_length).map(|bytes| (bytes, payload_start))
+    }
 
-        let (payload, rest) = self.buf.split_at(payload_length);
-        self.buf = rest;
-        self.bytepos = self.bytepos.saturating_add(payload_length);
-        Ok(payload)
+    /// Decodes the next payload as a nested decoder.
+    #[inline]
+    pub fn decode_payload(&mut self, is_list: bool) -> Result<Self> {
+        let (payload, payload_start) = self.decode_bytes_with_position(is_list)?;
+        Ok(Self::with_bytepos(payload, payload_start))
     }
 
     /// Decodes a string slice from the buffer, advancing past the full item.
     #[inline]
     pub fn decode_str(&mut self) -> Result<&'de str> {
-        let item_start = self.bytepos;
-        let bytes = self.decode_bytes(false)?;
+        let (bytes, payload_start) = self.decode_bytes_with_position(false)?;
         core::str::from_utf8(bytes)
-            .map_err(|_| Error::with_bytepos(ErrorKind::Custom("invalid string"), item_start))
+            .map_err(|_| Error::with_bytepos(ErrorKind::Custom("invalid string"), payload_start))
     }
 
     /// Decodes the next item using [`RlpDecodable::rlp_decode`].
     #[inline]
-    pub fn decode_next<T: RlpDecodable>(&mut self) -> Result<T> {
-        self.decode_with(T::rlp_decode)
+    pub fn decode_next<T: RlpDecodable<'de>>(&mut self) -> Result<T> {
+        T::rlp_decode(self)
     }
 
     /// Decodes the next item using [`RlpDecodable::rlp_decode_raw`].
     #[inline]
-    pub fn decode_next_raw<T: RlpDecodable>(&mut self) -> Result<T> {
-        self.decode_with(T::rlp_decode_raw)
+    pub fn decode_next_raw<T: RlpDecodable<'de>>(&mut self) -> Result<T> {
+        T::rlp_decode_raw(self)
     }
 
+    /// Counts the remaining RLP items without advancing this decoder.
     #[inline]
-    fn decode_with<T>(&mut self, f: impl FnOnce(&mut &'de [u8]) -> Result<T>) -> Result<T> {
-        let before = self.buf.len();
-        match f(&mut self.buf) {
-            Ok(value) => {
-                self.advance_bytepos(before);
-                Ok(value)
-            }
-            Err(err) => {
-                let err = self.map_error(before, err);
-                self.advance_bytepos(before);
-                Err(err)
-            }
+    pub fn remaining_rlp_items(&self) -> Result<usize> {
+        let mut decoder = Self::with_bytepos(self.buf, self.bytepos);
+        let mut count = 0usize;
+        while !decoder.is_empty() {
+            decoder.skip_next()?;
+            count = count.saturating_add(1);
         }
+        Ok(count)
+    }
+
+    /// Skips the next RLP item.
+    #[inline]
+    pub fn skip_next(&mut self) -> Result<()> {
+        let Header { payload_length, .. } = self.decode_header()?;
+        self.advance(payload_length)?;
+        Ok(())
     }
 
     #[inline]
     fn advance_bytepos(&mut self, before: usize) {
         self.bytepos = self.bytepos.saturating_add(before.saturating_sub(self.buf.len()));
     }
-
-    #[inline]
-    const fn map_error(&self, before: usize, err: Error) -> Error {
-        let relative = before.saturating_sub(self.buf.len()).saturating_add(err.bytepos());
-        Error::with_bytepos(err.kind(), self.bytepos.saturating_add(relative))
-    }
 }
 
 /// An active RLP decoder, with a specific slice of a payload.
 #[derive(Debug)]
 pub struct Rlp<'a> {
-    payload_view: &'a [u8],
+    decoder: Decoder<'a>,
 }
 
 impl<'a> Rlp<'a> {
     /// Instantiate an RLP decoder with a payload slice.
-    pub fn new(mut payload: &'a [u8]) -> Result<Self> {
-        let payload_view = Header::decode_bytes(&mut payload, true)?;
-        Ok(Self { payload_view })
+    pub fn new(payload: &'a [u8]) -> Result<Self> {
+        let mut decoder = Decoder::new(payload);
+        let decoder = decoder.decode_payload(true)?;
+        Ok(Self { decoder })
     }
 
     /// Decode the next item from the buffer.
     #[inline]
-    pub fn get_next<T: RlpDecodable>(&mut self) -> Result<Option<T>> {
-        if self.payload_view.is_empty() {
+    pub fn get_next<T: RlpDecodable<'a>>(&mut self) -> Result<Option<T>> {
+        if self.decoder.is_empty() {
             Ok(None)
         } else {
-            T::rlp_decode(&mut self.payload_view).map(Some)
+            T::rlp_decode(&mut self.decoder).map(Some)
         }
     }
 }
 
-impl<T: ?Sized> RlpDecodable for PhantomData<T> {
-    fn rlp_decode(_buf: &mut &[u8]) -> Result<Self> {
+impl<'de, T: ?Sized> RlpDecodable<'de> for PhantomData<T> {
+    const MIN_RAW_ITEMS: usize = 0;
+
+    fn rlp_decode(_decoder: &mut Decoder<'de>) -> Result<Self> {
         Ok(Self)
     }
 }
 
-impl RlpDecodable for PhantomPinned {
-    fn rlp_decode(_buf: &mut &[u8]) -> Result<Self> {
+impl<'de> RlpDecodable<'de> for PhantomPinned {
+    const MIN_RAW_ITEMS: usize = 0;
+
+    fn rlp_decode(_decoder: &mut Decoder<'de>) -> Result<Self> {
         Ok(Self)
     }
 }
 
-impl RlpDecodable for bool {
+impl<'de> RlpDecodable<'de> for bool {
     #[inline]
-    fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
-        Ok(match u8::rlp_decode(buf)? {
+    fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+        let bytepos = decoder.bytepos();
+        Ok(match u8::rlp_decode(decoder)? {
             0 => false,
             1 => true,
-            _ => return Err(ErrorKind::Custom("invalid bool value, must be 0 or 1").into()),
+            _ => {
+                return Err(Error::with_bytepos(
+                    ErrorKind::Custom("invalid bool value, must be 0 or 1"),
+                    bytepos,
+                ))
+            }
         })
     }
 }
 
-impl<const N: usize> RlpDecodable for [u8; N] {
+impl<'de, const N: usize> RlpDecodable<'de> for [u8; N] {
     #[inline]
-    fn rlp_decode(from: &mut &[u8]) -> Result<Self> {
-        let bytes = Header::decode_bytes(from, false)?;
-        Self::try_from(bytes).map_err(|_| ErrorKind::UnexpectedLength.into())
+    fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+        let (bytes, payload_start) = decoder.decode_bytes_with_position(false)?;
+        Self::try_from(bytes)
+            .map_err(|_| Error::with_bytepos(ErrorKind::UnexpectedLength, payload_start))
     }
 }
 
 macro_rules! decode_integer {
     ($($t:ty),+ $(,)?) => {$(
-        impl RlpDecodable for $t {
+        impl<'de> RlpDecodable<'de> for $t {
             #[inline]
-            fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
-                let bytes = Header::decode_bytes(buf, false)?;
-                static_left_pad(bytes).map(<$t>::from_be_bytes)
+            fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+                let (bytes, payload_start) = decoder.decode_bytes_with_position(false)?;
+                static_left_pad(bytes)
+                    .map(<$t>::from_be_bytes)
+                    .map_err(|err| Error::with_bytepos(err.kind(), payload_start.saturating_add(err.bytepos())))
             }
         }
     )+};
@@ -226,35 +287,34 @@ macro_rules! decode_integer {
 
 decode_integer!(u8, u16, u32, u64, usize, u128);
 
-impl RlpDecodable for Bytes {
+impl<'de> RlpDecodable<'de> for Bytes {
     #[inline]
-    fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
-        Header::decode_bytes(buf, false).map(|x| Self::from(x.to_vec()))
+    fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+        decoder.decode_bytes(false).map(|x| Self::from(x.to_vec()))
     }
 }
 
-impl RlpDecodable for BytesMut {
+impl<'de> RlpDecodable<'de> for BytesMut {
     #[inline]
-    fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
-        Header::decode_bytes(buf, false).map(Self::from)
+    fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+        decoder.decode_bytes(false).map(Self::from)
     }
 }
 
-impl RlpDecodable for alloc::string::String {
+impl<'de> RlpDecodable<'de> for alloc::string::String {
     #[inline]
-    fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
-        Header::decode_str(buf).map(Into::into)
+    fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+        decoder.decode_str().map(Into::into)
     }
 }
 
-impl<T: RlpDecodable> RlpDecodable for alloc::vec::Vec<T> {
+impl<'de, T: RlpDecodable<'de>> RlpDecodable<'de> for alloc::vec::Vec<T> {
     #[inline]
-    fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
-        let mut bytes = Header::decode_bytes(buf, true)?;
+    fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+        let mut payload = decoder.decode_payload(true)?;
         let mut vec = Self::new();
-        let payload_view = &mut bytes;
-        while !payload_view.is_empty() {
-            vec.push(T::rlp_decode(payload_view)?);
+        while !payload.is_empty() {
+            vec.push(T::rlp_decode(&mut payload)?);
         }
         Ok(vec)
     }
@@ -262,29 +322,30 @@ impl<T: RlpDecodable> RlpDecodable for alloc::vec::Vec<T> {
 
 macro_rules! tuple_impls {
     ($(($($ty:ident),+)),+ $(,)?) => {$(
-        impl<$($ty: RlpDecodable),+> RlpDecodable for ($($ty,)+) {
+        impl<'de, $($ty: RlpDecodable<'de>),+> RlpDecodable<'de> for ($($ty,)+) {
+            const MIN_RAW_ITEMS: usize = 0usize $(+ <$ty as RlpDecodable<'de>>::MIN_RAW_ITEMS)+;
+
             #[inline]
-            fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
-                let mut payload = Header::decode_bytes(buf, true)?;
+            fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+                let mut payload = decoder.decode_payload(true)?;
                 let started_len = payload.len();
 
                 let this = Self::rlp_decode_raw(&mut payload)?;
 
-                let consumed = started_len - payload.len();
+                let consumed = started_len.saturating_sub(payload.len());
                 if consumed != started_len {
-                    return Err(ErrorKind::ListLengthMismatch {
-                        expected: started_len,
-                        got: consumed,
-                    }
-                    .into());
+                    return Err(payload.error(ErrorKind::ListLengthMismatch {
+                            expected: started_len,
+                            got: consumed,
+                        }));
                 }
 
                 Ok(this)
             }
 
             #[inline]
-            fn rlp_decode_raw(buf: &mut &[u8]) -> Result<Self> {
-                Ok(($(<$ty as RlpDecodable>::rlp_decode(buf)?,)+))
+            fn rlp_decode_raw(decoder: &mut Decoder<'de>) -> Result<Self> {
+                Ok(($(<$ty as RlpDecodable<'de>>::rlp_decode(decoder)?,)+))
             }
         }
     )+};
@@ -308,10 +369,12 @@ tuple_impls! {
 macro_rules! wrap_impl {
     ($($(#[$attr:meta])* [$($gen:tt)*] <$t:ty>::$new:ident($t2:ty)),+ $(,)?) => {$(
         $(#[$attr])*
-        impl<$($gen)*> RlpDecodable for $t {
+        impl<'de, $($gen)*> RlpDecodable<'de> for $t {
+            const MIN_RAW_ITEMS: usize = <$t2 as RlpDecodable<'de>>::MIN_RAW_ITEMS;
+
             #[inline]
-            fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
-                <$t2 as RlpDecodable>::rlp_decode(buf).map(<$t>::$new)
+            fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+                <$t2 as RlpDecodable<'de>>::rlp_decode(decoder).map(<$t>::$new)
             }
         }
     )+};
@@ -320,19 +383,21 @@ macro_rules! wrap_impl {
 wrap_impl! {
     #[cfg(feature = "arrayvec")]
     [const N: usize] <arrayvec::ArrayVec<u8, N>>::from([u8; N]),
-    [T: RlpDecodable] <alloc::boxed::Box<T>>::new(T),
-    [T: RlpDecodable] <alloc::rc::Rc<T>>::new(T),
+    [T: RlpDecodable<'de>] <alloc::boxed::Box<T>>::new(T),
+    [T: RlpDecodable<'de>] <alloc::rc::Rc<T>>::new(T),
     #[cfg(target_has_atomic = "ptr")]
-    [T: RlpDecodable] <alloc::sync::Arc<T>>::new(T),
+    [T: RlpDecodable<'de>] <alloc::sync::Arc<T>>::new(T),
 }
 
-impl<T: ?Sized + alloc::borrow::ToOwned> RlpDecodable for alloc::borrow::Cow<'_, T>
+impl<'de, T: ?Sized + alloc::borrow::ToOwned> RlpDecodable<'de> for alloc::borrow::Cow<'_, T>
 where
-    T::Owned: RlpDecodable,
+    T::Owned: RlpDecodable<'de>,
 {
+    const MIN_RAW_ITEMS: usize = <T::Owned as RlpDecodable<'de>>::MIN_RAW_ITEMS;
+
     #[inline]
-    fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
-        T::Owned::rlp_decode(buf).map(Self::Owned)
+    fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+        T::Owned::rlp_decode(decoder).map(Self::Owned)
     }
 }
 
@@ -344,32 +409,36 @@ mod std_impl {
     #[cfg(feature = "std")]
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-    impl RlpDecodable for IpAddr {
-        fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
-            let bytes = Header::decode_bytes(buf, false)?;
+    impl<'de> RlpDecodable<'de> for IpAddr {
+        fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+            let (bytes, payload_start) = decoder.decode_bytes_with_position(false)?;
             match bytes.len() {
                 4 => Ok(Self::V4(Ipv4Addr::from(slice_to_array::<4>(bytes).expect("infallible")))),
                 16 => {
                     Ok(Self::V6(Ipv6Addr::from(slice_to_array::<16>(bytes).expect("infallible"))))
                 }
-                _ => Err(ErrorKind::UnexpectedLength.into()),
+                _ => Err(Error::with_bytepos(ErrorKind::UnexpectedLength, payload_start)),
             }
         }
     }
 
-    impl RlpDecodable for Ipv4Addr {
+    impl<'de> RlpDecodable<'de> for Ipv4Addr {
         #[inline]
-        fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
-            let bytes = Header::decode_bytes(buf, false)?;
-            slice_to_array::<4>(bytes).map(Self::from)
+        fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+            let (bytes, payload_start) = decoder.decode_bytes_with_position(false)?;
+            slice_to_array::<4>(bytes)
+                .map(Self::from)
+                .map_err(|err| Error::with_bytepos(err.kind(), payload_start))
         }
     }
 
-    impl RlpDecodable for Ipv6Addr {
+    impl<'de> RlpDecodable<'de> for Ipv6Addr {
         #[inline]
-        fn rlp_decode(buf: &mut &[u8]) -> Result<Self> {
-            let bytes = Header::decode_bytes(buf, false)?;
-            slice_to_array::<16>(bytes).map(Self::from)
+        fn rlp_decode(decoder: &mut Decoder<'de>) -> Result<Self> {
+            let (bytes, payload_start) = decoder.decode_bytes_with_position(false)?;
+            slice_to_array::<16>(bytes)
+                .map(Self::from)
+                .map_err(|err| Error::with_bytepos(err.kind(), payload_start))
         }
     }
 
@@ -385,17 +454,47 @@ mod std_impl {
 ///
 /// Returns an error if the encoding is invalid or if data remains after decoding the RLP item.
 #[inline]
-pub fn decode_exact<T: RlpDecodable>(bytes: impl AsRef<[u8]>) -> Result<T> {
-    let mut buf = bytes.as_ref();
-    let out = T::rlp_decode(&mut buf)?;
+pub fn decode_exact<T>(bytes: impl AsRef<[u8]>) -> Result<T>
+where
+    T: for<'de> RlpDecodable<'de>,
+{
+    let mut decoder = Decoder::new(bytes.as_ref());
+    let out = T::rlp_decode(&mut decoder)?;
 
     // check if there are any remaining bytes after decoding
-    if !buf.is_empty() {
+    if !decoder.is_empty() {
         // TODO: introduce a new variant TrailingBytes to better distinguish this error
-        return Err(ErrorKind::UnexpectedLength.into());
+        return Err(decoder.error(ErrorKind::UnexpectedLength));
     }
 
     Ok(out)
+}
+
+/// Decodes a raw optional field without consuming items reserved for enclosing fields.
+///
+/// When another raw optional field follows, `0x80` is interpreted as the `None` gap sentinel.
+/// That byte is also the valid RLP encoding of values such as `0`, `false`, and empty strings, so
+/// those values are only unambiguous when no later optional raw field is present.
+#[doc(hidden)]
+#[inline]
+pub fn decode_optional_raw<'de, T: RlpDecodable<'de>>(
+    decoder: &mut Decoder<'de>,
+    min_tail_items: usize,
+) -> Result<Option<T>> {
+    let reserved_items = decoder.raw_tail_items().saturating_add(min_tail_items);
+    let remaining_items = decoder.remaining_rlp_items()?;
+    if remaining_items <= reserved_items {
+        return Ok(None);
+    }
+
+    if remaining_items > reserved_items.saturating_add(1)
+        && decoder.peek() == Some(crate::EMPTY_STRING_CODE)
+    {
+        decoder.advance(1)?;
+        Ok(None)
+    } else {
+        T::rlp_decode(decoder).map(Some)
+    }
 }
 
 /// Left-pads a slice to a statically known size array.
@@ -435,24 +534,28 @@ mod tests {
     #[allow(unused_imports)]
     use alloc::{string::String, vec::Vec};
 
-    /// Helper to create an `Error` from an `ErrorKind` with bytepos 0.
     fn err(kind: ErrorKind) -> Error {
         Error::new(kind)
     }
 
+    fn err_at(kind: ErrorKind, bytepos: usize) -> Error {
+        Error::with_bytepos(kind, bytepos)
+    }
+
     fn check_decode<'a, T, IT>(fixtures: IT)
     where
-        T: RlpEncodable + RlpDecodable + PartialEq + Debug,
+        T: RlpEncodable + for<'de> RlpDecodable<'de> + PartialEq + Debug,
         IT: IntoIterator<Item = (Result<T>, &'a [u8])>,
     {
-        for (expected, mut input) in fixtures {
+        for (expected, input) in fixtures {
             if let Ok(expected) = &expected {
                 assert_eq!(crate::encode(expected), input, "{expected:?}");
             }
 
             let orig = input;
+            let mut decoder = Decoder::new(input);
             assert_eq!(
-                T::rlp_decode(&mut input),
+                T::rlp_decode(&mut decoder),
                 expected,
                 "input: {}{}",
                 hex::encode(orig),
@@ -463,7 +566,7 @@ mod tests {
             );
 
             if expected.is_ok() {
-                assert_eq!(input, &[]);
+                assert!(decoder.is_empty());
             }
         }
     }
@@ -471,11 +574,11 @@ mod tests {
     #[test]
     fn rlp_bool() {
         let out = [0x80];
-        let val = bool::rlp_decode(&mut &out[..]);
+        let val = bool::rlp_decode(&mut Decoder::new(&out));
         assert_eq!(Ok(false), val);
 
         let out = [0x01];
-        let val = bool::rlp_decode(&mut &out[..]);
+        let val = bool::rlp_decode(&mut Decoder::new(&out));
         assert_eq!(Ok(true), val);
     }
 
@@ -495,8 +598,11 @@ mod tests {
     fn rlp_fixed_length() {
         check_decode([
             (Ok(hex!("6f62636465666768696a6b6c6d")), &hex!("8D6F62636465666768696A6B6C6D")[..]),
-            (Err(err(ErrorKind::UnexpectedLength)), &hex!("8C6F62636465666768696A6B6C")[..]),
-            (Err(err(ErrorKind::UnexpectedLength)), &hex!("8E6F62636465666768696A6B6C6D6E")[..]),
+            (Err(err_at(ErrorKind::UnexpectedLength, 1)), &hex!("8C6F62636465666768696A6B6C")[..]),
+            (
+                Err(err_at(ErrorKind::UnexpectedLength, 1)),
+                &hex!("8E6F62636465666768696A6B6C6D6E")[..],
+            ),
         ])
     }
 
@@ -507,15 +613,15 @@ mod tests {
             (Ok(0_u64), &hex!("80")[..]),
             (Ok(0x0505_u64), &hex!("820505")[..]),
             (Ok(0xCE05050505_u64), &hex!("85CE05050505")[..]),
-            (Err(err(ErrorKind::Overflow)), &hex!("8AFFFFFFFFFFFFFFFFFF7C")[..]),
-            (Err(err(ErrorKind::InputTooShort)), &hex!("8BFFFFFFFFFFFFFFFFFF7C")[..]),
+            (Err(err_at(ErrorKind::Overflow, 1)), &hex!("8AFFFFFFFFFFFFFFFFFF7C")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("8BFFFFFFFFFFFFFFFFFF7C")[..]),
             (Err(err(ErrorKind::UnexpectedList)), &hex!("C0")[..]),
             (Err(err(ErrorKind::LeadingZero)), &hex!("00")[..]),
-            (Err(err(ErrorKind::NonCanonicalSingleByte)), &hex!("8105")[..]),
-            (Err(err(ErrorKind::LeadingZero)), &hex!("8200F4")[..]),
-            (Err(err(ErrorKind::NonCanonicalSize)), &hex!("B8020004")[..]),
+            (Err(err_at(ErrorKind::NonCanonicalSingleByte, 1)), &hex!("8105")[..]),
+            (Err(err_at(ErrorKind::LeadingZero, 1)), &hex!("8200F4")[..]),
+            (Err(err_at(ErrorKind::NonCanonicalSize, 2)), &hex!("B8020004")[..]),
             (
-                Err(err(ErrorKind::Overflow)),
+                Err(err_at(ErrorKind::Overflow, 1)),
                 &hex!("A101000000000000000000000000000000000000008B000000000000000000000000")[..],
             ),
         ])
@@ -549,42 +655,45 @@ mod tests {
     #[test]
     fn malformed_rlp() {
         check_decode::<Bytes, _>([
-            (Err(err(ErrorKind::InputTooShort)), &hex!("C1")[..]),
-            (Err(err(ErrorKind::InputTooShort)), &hex!("D7")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("C1")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("D7")[..]),
         ]);
         check_decode::<[u8; 5], _>([
-            (Err(err(ErrorKind::InputTooShort)), &hex!("C1")[..]),
-            (Err(err(ErrorKind::InputTooShort)), &hex!("D7")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("C1")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("D7")[..]),
         ]);
         #[cfg(feature = "std")]
         check_decode::<std::net::IpAddr, _>([
-            (Err(err(ErrorKind::InputTooShort)), &hex!("C1")[..]),
-            (Err(err(ErrorKind::InputTooShort)), &hex!("D7")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("C1")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("D7")[..]),
         ]);
         check_decode::<Vec<u8>, _>([
-            (Err(err(ErrorKind::InputTooShort)), &hex!("C1")[..]),
-            (Err(err(ErrorKind::InputTooShort)), &hex!("D7")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("C1")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("D7")[..]),
         ]);
         check_decode::<String, _>([
-            (Err(err(ErrorKind::InputTooShort)), &hex!("C1")[..]),
-            (Err(err(ErrorKind::InputTooShort)), &hex!("D7")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("C1")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("D7")[..]),
         ]);
         check_decode::<String, _>([
-            (Err(err(ErrorKind::InputTooShort)), &hex!("C1")[..]),
-            (Err(err(ErrorKind::InputTooShort)), &hex!("D7")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("C1")[..]),
+            (Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("D7")[..]),
         ]);
-        check_decode::<u8, _>([(Err(err(ErrorKind::InputTooShort)), &hex!("82")[..])]);
-        check_decode::<u64, _>([(Err(err(ErrorKind::InputTooShort)), &hex!("82")[..])]);
+        check_decode::<u8, _>([(Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("82")[..])]);
+        check_decode::<u64, _>([(Err(err_at(ErrorKind::InputTooShort, 1)), &hex!("82")[..])]);
     }
 
     #[test]
     fn rlp_full() {
-        fn check_decode_exact<T: RlpDecodable + RlpEncodable + PartialEq + Debug>(input: T) {
+        fn check_decode_exact<T: for<'de> RlpDecodable<'de> + RlpEncodable + PartialEq + Debug>(
+            input: T,
+        ) {
             let encoded = encode(&input);
+            let encoded_len = encoded.len();
             assert_eq!(decode_exact::<T>(&encoded), Ok(input));
             assert_eq!(
                 decode_exact::<T>([encoded, vec![0x00]].concat()),
-                Err(Error::new(ErrorKind::UnexpectedLength))
+                Err(Error::with_bytepos(ErrorKind::UnexpectedLength, encoded_len))
             );
         }
 

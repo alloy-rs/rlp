@@ -58,9 +58,9 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
 
         length_exprs.push(encodable_length(i, field, is_opt, fields.clone()));
         encode_exprs.push(encodable_field(i, field, is_opt, fields.clone()));
-        if !is_opt && !attributes_include(&field.attrs, "default") {
-            length_exprs_raw.push(encodable_length_raw(i, field));
-            encode_exprs_raw.push(encodable_field_raw(i, field));
+        if !attributes_include(&field.attrs, "default") {
+            length_exprs_raw.push(encodable_length_raw(i, field, is_opt, fields.clone()));
+            encode_exprs_raw.push(encodable_field_raw(i, field, is_opt, fields.clone()));
         }
     }
 
@@ -80,7 +80,7 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
                 }
 
                 #[inline]
-                fn rlp_encode(&self, out: &mut alloy_rlp::Encoder<'_>) {
+                fn rlp_encode<__AlloyRlpBuf: alloy_rlp::BufMut>(&self, out: &mut alloy_rlp::Encoder<__AlloyRlpBuf>) {
                     alloy_rlp::Header {
                         list: true,
                         payload_length: self._alloy_rlp_payload_length(),
@@ -95,7 +95,7 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
                 }
 
                 #[inline]
-                fn rlp_encode_raw(&self, out: &mut alloy_rlp::Encoder<'_>) {
+                fn rlp_encode_raw<__AlloyRlpBuf: alloy_rlp::BufMut>(&self, out: &mut alloy_rlp::Encoder<__AlloyRlpBuf>) {
                     #(#encode_exprs_raw)*
                 }
             }
@@ -151,7 +151,7 @@ fn impl_encodable_transparent(
                 }
 
                 #[inline]
-                fn rlp_encode(&self, out: &mut alloy_rlp::Encoder<'_>) {
+                fn rlp_encode<__AlloyRlpBuf: alloy_rlp::BufMut>(&self, out: &mut alloy_rlp::Encoder<__AlloyRlpBuf>) {
                     alloy_rlp::RlpEncodable::rlp_encode(&self.#ident, out)
                 }
 
@@ -161,7 +161,7 @@ fn impl_encodable_transparent(
                 }
 
                 #[inline]
-                fn rlp_encode_raw(&self, out: &mut alloy_rlp::Encoder<'_>) {
+                fn rlp_encode_raw<__AlloyRlpBuf: alloy_rlp::BufMut>(&self, out: &mut alloy_rlp::Encoder<__AlloyRlpBuf>) {
                     alloy_rlp::RlpEncodable::rlp_encode_raw(&self.#ident, out)
                 }
             }
@@ -197,8 +197,18 @@ pub(crate) fn impl_encodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
                 }
 
                 #[inline]
-                fn rlp_encode(&self, out: &mut alloy_rlp::Encoder<'_>) {
+                fn rlp_encode<__AlloyRlpBuf: alloy_rlp::BufMut>(&self, out: &mut alloy_rlp::Encoder<__AlloyRlpBuf>) {
                     alloy_rlp::RlpEncodable::rlp_encode(&self.#ident, out)
+                }
+
+                #[inline]
+                fn rlp_len_raw(&self) -> usize {
+                    alloy_rlp::RlpEncodable::rlp_len_raw(&self.#ident)
+                }
+
+                #[inline]
+                fn rlp_encode_raw<__AlloyRlpBuf: alloy_rlp::BufMut>(&self, out: &mut alloy_rlp::Encoder<__AlloyRlpBuf>) {
+                    alloy_rlp::RlpEncodable::rlp_encode_raw(&self.#ident, out)
                 }
             }
         };
@@ -275,10 +285,18 @@ fn encodable_length<'a>(
     }
 }
 
-fn encodable_length_raw(index: usize, field: &syn::Field) -> TokenStream {
+fn encodable_length_raw<'a>(
+    index: usize,
+    field: &syn::Field,
+    is_opt: bool,
+    remaining: Peekable<impl Iterator<Item = (usize, &'a syn::Field)>>,
+) -> TokenStream {
     let ident = field_ident(index, field);
 
-    if attributes_include(&field.attrs, "flatten") {
+    if is_opt {
+        let condition = remaining_opt_fields_some_condition(remaining);
+        quote! { self.#ident.as_ref().map(|val| alloy_rlp::RlpEncodable::rlp_len(val)).unwrap_or((#condition) as usize) }
+    } else if attributes_include(&field.attrs, "flatten") {
         quote! { alloy_rlp::RlpEncodable::rlp_len_raw(&self.#ident) }
     } else {
         quote! { alloy_rlp::RlpEncodable::rlp_len(&self.#ident) }
@@ -318,10 +336,24 @@ fn encodable_field<'a>(
     }
 }
 
-fn encodable_field_raw(index: usize, field: &syn::Field) -> TokenStream {
+fn encodable_field_raw<'a>(
+    index: usize,
+    field: &syn::Field,
+    is_opt: bool,
+    remaining: Peekable<impl Iterator<Item = (usize, &'a syn::Field)>>,
+) -> TokenStream {
     let ident = field_ident(index, field);
 
-    if attributes_include(&field.attrs, "flatten") {
+    if is_opt {
+        let condition = remaining_opt_fields_some_condition(remaining);
+        quote! {
+            if let Some(val) = self.#ident.as_ref() {
+                alloy_rlp::RlpEncodable::rlp_encode(val, out)
+            } else if #condition {
+                out.put_u8(#EMPTY_STRING_CODE);
+            }
+        }
+    } else if attributes_include(&field.attrs, "flatten") {
         quote! { alloy_rlp::RlpEncodable::rlp_encode_raw(&self.#ident, out); }
     } else {
         quote! { alloy_rlp::RlpEncodable::rlp_encode(&self.#ident, out); }
@@ -331,11 +363,13 @@ fn encodable_field_raw(index: usize, field: &syn::Field) -> TokenStream {
 fn remaining_opt_fields_some_condition<'a>(
     remaining: impl Iterator<Item = (usize, &'a syn::Field)>,
 ) -> TokenStream {
-    let conditions = remaining.map(|(index, field)| {
-        let ident = field_ident(index, field);
-        quote! { self.#ident.is_some() }
-    });
-    quote! { #(#conditions)||* }
+    let conditions = remaining
+        .filter(|(_, field)| is_optional(field) && !attributes_include(&field.attrs, "default"))
+        .map(|(index, field)| {
+            let ident = field_ident(index, field);
+            quote! { self.#ident.is_some() }
+        });
+    quote! { false #(|| #conditions)* }
 }
 
 pub(crate) fn impl_encodable_tagged(ast: &syn::DeriveInput) -> Result<TokenStream> {
@@ -433,7 +467,7 @@ pub(crate) fn impl_encodable_tagged(ast: &syn::DeriveInput) -> Result<TokenStrea
                 }
 
                 #[inline]
-                fn rlp_encode(&self, out: &mut alloy_rlp::Encoder<'_>) {
+                fn rlp_encode<__AlloyRlpBuf: alloy_rlp::BufMut>(&self, out: &mut alloy_rlp::Encoder<__AlloyRlpBuf>) {
                     let payload_length = match self {
                         #(#length_arms)*
                     };
@@ -445,6 +479,11 @@ pub(crate) fn impl_encodable_tagged(ast: &syn::DeriveInput) -> Result<TokenStrea
                     match self {
                         #(#encode_arms)*
                     }
+                }
+
+                #[inline]
+                fn rlp_len_raw(&self) -> usize {
+                    self.rlp_len()
                 }
             }
         };

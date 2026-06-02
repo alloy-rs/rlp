@@ -17,7 +17,7 @@ Trait methods can then be accessed via the `RlpEncodable` and `RlpDecodable` tra
 
 ```rust
 # #[cfg(feature = "derive")] {
-use alloy_rlp::{RlpEncodable, RlpDecodable, Encoder};
+use alloy_rlp::{decode_exact, RlpEncodable, RlpDecodable, Encoder};
 
 #[derive(Debug, RlpEncodable, RlpDecodable, PartialEq)]
 pub struct MyStruct {
@@ -32,7 +32,7 @@ let my_struct = MyStruct {
 
 let mut buffer = Vec::<u8>::new();
 my_struct.rlp_encode(&mut Encoder::new(&mut buffer));
-let decoded = MyStruct::rlp_decode(&mut buffer.as_slice()).unwrap();
+let decoded = decode_exact::<MyStruct>(&buffer).unwrap();
 assert_eq!(my_struct, decoded);
 # }
 ```
