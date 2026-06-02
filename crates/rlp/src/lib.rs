@@ -11,7 +11,7 @@
 extern crate alloc;
 
 mod decode;
-pub use decode::{decode_exact, Decoder, Rlp, RlpDecodable};
+pub use decode::{decode_append, decode_exact, Decoder, Rlp, RlpDecodable};
 
 mod error;
 pub use error::{Error, ErrorKind, Result};
