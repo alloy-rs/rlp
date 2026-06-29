@@ -11,7 +11,7 @@ found [at ethereum.org][ref].
 We strongly recommend deriving RLP traits via the `RlpEncodable` and
 `RlpDecodable` derive macros.
 
-Trait methods can then be accessed via the `Encodable` and `Decodable` traits.
+Trait methods can then be accessed via the `RlpEncodable` and `RlpDecodable` traits.
 
 ## Trailing Optional Fields
 
@@ -35,7 +35,7 @@ encoding invariants that callers must uphold when constructing values.
 
 ```rust
 # #[cfg(feature = "derive")] {
-use alloy_rlp::{RlpEncodable, RlpDecodable, Decodable, Encodable};
+use alloy_rlp::{decode_exact, RlpEncodable, RlpDecodable, Encoder};
 
 #[derive(Debug, RlpEncodable, RlpDecodable, PartialEq)]
 pub struct MyStruct {
@@ -49,8 +49,40 @@ let my_struct = MyStruct {
 };
 
 let mut buffer = Vec::<u8>::new();
-let encoded = my_struct.encode(&mut buffer);
-let decoded = MyStruct::decode(&mut buffer.as_slice()).unwrap();
+my_struct.rlp_encode(&mut Encoder::new(&mut buffer));
+let decoded = decode_exact::<MyStruct>(&buffer).unwrap();
 assert_eq!(my_struct, decoded);
 # }
+```
+
+The derive macros reject ambiguous enum and flatten shapes:
+
+```compile_fail
+use alloy_rlp::{RlpDecodable, RlpEncodable};
+
+#[derive(RlpEncodable, RlpDecodable)]
+enum NotTagged {
+    A,
+}
+```
+
+```compile_fail
+use alloy_rlp::{RlpDecodable, RlpEncodable};
+
+#[derive(RlpEncodable, RlpDecodable)]
+struct BadFlatten {
+    #[rlp(flatten)]
+    field: Option<u64>,
+}
+```
+
+```compile_fail
+use alloy_rlp::{RlpDecodable, RlpEncodable};
+
+#[derive(RlpEncodable, RlpDecodable)]
+#[rlp(transparent)]
+struct BadTransparent {
+    a: u64,
+    b: u64,
+}
 ```

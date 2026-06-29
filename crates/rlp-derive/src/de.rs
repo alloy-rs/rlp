@@ -1,22 +1,51 @@
 use crate::utils::{
-    attributes_include, field_ident, is_optional, make_generics, option_inner_type, parse_struct,
-    parse_trailing_opts, TrailingOpts, EMPTY_STRING_CODE,
+    attributes_include, field_ident, get_tag_value, is_optional, make_generics, option_inner_type,
+    parse_enum, parse_struct, parse_trailing_opts, TrailingOpts, EMPTY_STRING_CODE,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Error, Result};
 
 pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
+    if attributes_include(&ast.attrs, "tagged") {
+        return impl_decodable_tagged(ast);
+    }
+    if matches!(ast.data, syn::Data::Enum(_)) {
+        let msg = "RLP enum derives require `#[rlp(tagged)]`";
+        return Err(Error::new_spanned(ast, msg));
+    }
+
     let body = parse_struct(ast, "RlpDecodable")?;
 
-    let fields = body.fields.iter().enumerate();
+    if attributes_include(&ast.attrs, "transparent") {
+        return impl_decodable_transparent(ast, body);
+    }
+
+    let all_fields: Vec<_> = body.fields.iter().enumerate().collect();
 
     let trailing_opts = parse_trailing_opts(&ast.attrs);
 
+    let last_consuming_idx = all_fields
+        .iter()
+        .rev()
+        .find(|(_, field)| {
+            !attributes_include(&field.attrs, "skip")
+                && !attributes_include(&field.attrs, "default")
+        })
+        .map(|(i, _)| *i);
+
     let mut encountered_opt_item = false;
     let mut decode_stmts = Vec::with_capacity(body.fields.len());
+    let mut decode_stmts_raw = Vec::with_capacity(body.fields.len());
+    let mut min_raw_item_exprs = Vec::with_capacity(body.fields.len());
     let mut canonical_assert_types = Vec::new();
-    for (i, field) in fields {
+    for &(i, field) in &all_fields {
+        let is_flatten = attributes_include(&field.attrs, "flatten");
+        if is_flatten && is_optional(field) {
+            let msg = "`#[rlp(flatten)]` cannot be used on `Option<T>` fields";
+            return Err(Error::new_spanned(field, msg));
+        }
+
         let is_opt = is_optional(field);
         if is_opt {
             if !trailing_opts.enabled {
@@ -35,12 +64,26 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
             return Err(Error::new_spanned(field, msg));
         }
 
-        decode_stmts.push(decodable_field(i, field, is_opt, trailing_opts));
+        let tail_items = min_raw_items_from(all_fields.iter().copied().filter(|(j, _)| *j > i));
+        let is_last_consuming = last_consuming_idx == Some(i);
+        decode_stmts.push(decodable_field(
+            i,
+            field,
+            is_opt,
+            trailing_opts,
+            is_last_consuming,
+            &tail_items,
+        ));
+        decode_stmts_raw.push(decodable_field_raw(i, field, trailing_opts, &tail_items));
+        if let Some(expr) = min_raw_items_field(field) {
+            min_raw_item_exprs.push(expr);
+        }
     }
 
     let name = &ast.ident;
-    let generics = make_generics(&ast.generics, quote!(alloy_rlp::Decodable));
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let generics = make_decode_generics(&ast.generics);
+    let (impl_generics, _, where_clause) = generics.split_for_impl();
+    let (_, ty_generics, _) = ast.generics.split_for_impl();
 
     let strict_asserts = canonical_assert_types.iter().map(|ty| {
         let msg = format!(
@@ -50,7 +93,13 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         );
         quote! {
             debug_assert!(
-                <#ty as alloy_rlp::Decodable>::decode(&mut &[#EMPTY_STRING_CODE][..]).is_err(),
+                {
+                    let __alloy_rlp_bytes: &'__alloy_rlp_de [u8] = &[#EMPTY_STRING_CODE];
+                    let mut __alloy_rlp_decoder = alloy_rlp::Decoder::new(__alloy_rlp_bytes);
+                    let __alloy_rlp_result: alloy_rlp::Result<#ty> =
+                        alloy_rlp::RlpDecodable::rlp_decode(&mut __alloy_rlp_decoder);
+                    __alloy_rlp_result.is_err()
+                },
                 #msg,
             );
         }
@@ -60,33 +109,112 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         const _: () = {
             extern crate alloy_rlp;
 
-            impl #impl_generics alloy_rlp::Decodable for #name #ty_generics #where_clause {
-                #[inline]
-                fn decode(b: &mut &[u8]) -> alloy_rlp::Result<Self> {
-                    #(#strict_asserts)*
-                    let alloy_rlp::Header { list, payload_length } = alloy_rlp::Header::decode(b)?;
-                    if !list {
-                        return Err(alloy_rlp::Error::UnexpectedString);
-                    }
+            impl #impl_generics alloy_rlp::RlpDecodable<'__alloy_rlp_de> for #name #ty_generics #where_clause {
+                const MIN_RAW_ITEMS: usize = 0usize #( + #min_raw_item_exprs)*;
 
+                #[inline]
+                fn rlp_decode(decoder: &mut alloy_rlp::Decoder<'__alloy_rlp_de>) -> alloy_rlp::Result<Self> {
+                    #(#strict_asserts)*
+                    let mut b = decoder.decode_payload(true)?;
                     let started_len = b.len();
-                    if started_len < payload_length {
-                        return Err(alloy_rlp::DecodeError::InputTooShort);
-                    }
 
                     let this = Self {
                         #(#decode_stmts)*
                     };
 
-                    let consumed = started_len - b.len();
-                    if consumed != payload_length {
-                        return Err(alloy_rlp::Error::ListLengthMismatch {
-                            expected: payload_length,
+                    let consumed = started_len.saturating_sub(b.len());
+                    if consumed != started_len {
+                        return Err(b.error(alloy_rlp::ErrorKind::ListLengthMismatch {
+                            expected: started_len,
                             got: consumed,
-                        });
+                        }));
                     }
 
                     Ok(this)
+                }
+
+                #[inline]
+                fn rlp_decode_raw(b: &mut alloy_rlp::Decoder<'__alloy_rlp_de>) -> alloy_rlp::Result<Self> {
+                    Ok(Self {
+                        #(#decode_stmts_raw)*
+                    })
+                }
+            }
+        };
+    })
+}
+
+fn impl_decodable_transparent(
+    ast: &syn::DeriveInput,
+    body: &syn::DataStruct,
+) -> Result<TokenStream> {
+    let non_skipped: Vec<_> = body
+        .fields
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| !attributes_include(&field.attrs, "skip"))
+        .collect();
+
+    if non_skipped.len() != 1 {
+        let msg = "`#[rlp(transparent)]` requires exactly one non-skipped field";
+        return Err(Error::new(ast.ident.span(), msg));
+    }
+
+    let (_, non_skipped_field) = non_skipped[0];
+    let non_skipped_ty = &non_skipped_field.ty;
+
+    let field_inits: Vec<_> = body
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(i, field)| {
+            let ident = field_ident(i, field);
+            if attributes_include(&field.attrs, "skip") {
+                quote! { #ident: alloy_rlp::private::Default::default(), }
+            } else {
+                quote! { #ident: alloy_rlp::RlpDecodable::rlp_decode(decoder)?, }
+            }
+        })
+        .collect();
+
+    let field_inits_raw: Vec<_> = body
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(i, field)| {
+            let ident = field_ident(i, field);
+            if attributes_include(&field.attrs, "skip") {
+                quote! { #ident: alloy_rlp::private::Default::default(), }
+            } else {
+                quote! { #ident: alloy_rlp::RlpDecodable::rlp_decode_raw(decoder)?, }
+            }
+        })
+        .collect();
+
+    let name = &ast.ident;
+    let generics = make_decode_generics(&ast.generics);
+    let (impl_generics, _, where_clause) = generics.split_for_impl();
+    let (_, ty_generics, _) = ast.generics.split_for_impl();
+
+    Ok(quote! {
+        const _: () = {
+            extern crate alloy_rlp;
+
+            impl #impl_generics alloy_rlp::RlpDecodable<'__alloy_rlp_de> for #name #ty_generics #where_clause {
+                const MIN_RAW_ITEMS: usize = <#non_skipped_ty as alloy_rlp::RlpDecodable<'__alloy_rlp_de>>::MIN_RAW_ITEMS;
+
+                #[inline]
+                fn rlp_decode(decoder: &mut alloy_rlp::Decoder<'__alloy_rlp_de>) -> alloy_rlp::Result<Self> {
+                    alloy_rlp::private::Result::Ok(Self {
+                        #(#field_inits)*
+                    })
+                }
+
+                #[inline]
+                fn rlp_decode_raw(decoder: &mut alloy_rlp::Decoder<'__alloy_rlp_de>) -> alloy_rlp::Result<Self> {
+                    alloy_rlp::private::Result::Ok(Self {
+                        #(#field_inits_raw)*
+                    })
                 }
             }
         };
@@ -102,17 +230,26 @@ pub(crate) fn impl_decodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
     }
 
     let name = &ast.ident;
-    let generics = make_generics(&ast.generics, quote!(alloy_rlp::Decodable));
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let field_ty = body.fields.iter().next().map(|field| &field.ty).unwrap();
+    let generics = make_decode_generics(&ast.generics);
+    let (impl_generics, _, where_clause) = generics.split_for_impl();
+    let (_, ty_generics, _) = ast.generics.split_for_impl();
 
     Ok(quote! {
         const _: () = {
             extern crate alloy_rlp;
 
-            impl #impl_generics alloy_rlp::Decodable for #name #ty_generics #where_clause {
+            impl #impl_generics alloy_rlp::RlpDecodable<'__alloy_rlp_de> for #name #ty_generics #where_clause {
+                const MIN_RAW_ITEMS: usize = <#field_ty as alloy_rlp::RlpDecodable<'__alloy_rlp_de>>::MIN_RAW_ITEMS;
+
                 #[inline]
-                fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
-                    alloy_rlp::private::Result::map(alloy_rlp::Decodable::decode(buf), Self)
+                fn rlp_decode(decoder: &mut alloy_rlp::Decoder<'__alloy_rlp_de>) -> alloy_rlp::Result<Self> {
+                    alloy_rlp::private::Result::map(alloy_rlp::RlpDecodable::rlp_decode(decoder), Self)
+                }
+
+                #[inline]
+                fn rlp_decode_raw(decoder: &mut alloy_rlp::Decoder<'__alloy_rlp_de>) -> alloy_rlp::Result<Self> {
+                    alloy_rlp::private::Result::map(alloy_rlp::RlpDecodable::rlp_decode_raw(decoder), Self)
                 }
             }
         };
@@ -124,55 +261,210 @@ fn decodable_field(
     field: &syn::Field,
     is_opt: bool,
     trailing_opts: TrailingOpts,
+    is_last_consuming: bool,
+    tail_items: &TokenStream,
 ) -> TokenStream {
     let ident = field_ident(index, field);
 
-    if attributes_include(&field.attrs, "default") {
+    if attributes_include(&field.attrs, "default") || attributes_include(&field.attrs, "skip") {
         quote! { #ident: alloy_rlp::private::Default::default(), }
     } else if is_opt {
         if trailing_opts.no_gaps {
-            // no_gaps: no 0x80 sentinel logic; just decode if there's remaining payload
+            // no_gaps: no 0x80 sentinel logic; just decode if there's remaining payload.
             quote! {
-                #ident: if started_len - b.len() < payload_length {
-                    Some(alloy_rlp::Decodable::decode(b)?)
+                #ident: if !b.is_empty() {
+                    Some(alloy_rlp::RlpDecodable::rlp_decode(&mut b)?)
                 } else {
                     None
                 },
             }
         } else if trailing_opts.canonical {
-            // canonical: 0x80 is only treated as a None placeholder if there is
-            // more payload remaining after consuming it. This ensures canonical encoding:
-            // trailing None fields must be omitted, not encoded as 0x80.
+            // canonical: 0x80 is a None placeholder only when another payload byte follows it.
             quote! {
-                #ident: if started_len - b.len() < payload_length {
-                    if alloy_rlp::private::Option::map_or(b.first(), false, |b| *b == #EMPTY_STRING_CODE)
-                        && (started_len - b.len() + 1) < payload_length
-                    {
-                        alloy_rlp::Buf::advance(b, 1);
+                #ident: if !b.is_empty() {
+                    if b.peek() == Some(#EMPTY_STRING_CODE) && b.len() > 1 {
+                        b.advance(1)?;
                         None
                     } else {
-                        Some(alloy_rlp::Decodable::decode(b)?)
+                        Some(alloy_rlp::RlpDecodable::rlp_decode(&mut b)?)
                     }
                 } else {
                     None
                 },
             }
-        } else {
-            // plain trailing: 0x80 always treated as None
+        } else if is_last_consuming {
             quote! {
-                #ident: if started_len - b.len() < payload_length {
-                    if alloy_rlp::private::Option::map_or(b.first(), false, |b| *b == #EMPTY_STRING_CODE) {
-                        alloy_rlp::Buf::advance(b, 1);
+                #ident: if !b.is_empty() {
+                    Some(alloy_rlp::RlpDecodable::rlp_decode(&mut b)?)
+                } else {
+                    None
+                },
+            }
+        } else {
+            quote! {
+                #ident: if !b.is_empty() {
+                    if b.peek() == Some(#EMPTY_STRING_CODE) {
+                        b.advance(1)?;
                         None
                     } else {
-                        Some(alloy_rlp::Decodable::decode(b)?)
+                        Some(alloy_rlp::RlpDecodable::rlp_decode(&mut b)?)
                     }
                 } else {
                     None
                 },
             }
         }
+    } else if attributes_include(&field.attrs, "flatten") {
+        quote! {
+            #ident: {
+                let raw_tail_items = b.raw_tail_items().saturating_add(#tail_items);
+                b.with_raw_tail_items(raw_tail_items, |b| alloy_rlp::RlpDecodable::rlp_decode_raw(b))?
+            },
+        }
     } else {
-        quote! { #ident: alloy_rlp::Decodable::decode(b)?, }
+        quote! { #ident: alloy_rlp::RlpDecodable::rlp_decode(&mut b)?, }
+    }
+}
+
+fn decodable_field_raw(
+    index: usize,
+    field: &syn::Field,
+    trailing_opts: TrailingOpts,
+    tail_items: &TokenStream,
+) -> TokenStream {
+    let ident = field_ident(index, field);
+
+    if attributes_include(&field.attrs, "default") || attributes_include(&field.attrs, "skip") {
+        quote! { #ident: alloy_rlp::private::Default::default(), }
+    } else if is_optional(field) {
+        let inner_ty = option_inner_type(field).expect("checked optional field");
+        if trailing_opts.no_gaps {
+            quote! {
+                #ident: {
+                    let reserved_items = b.raw_tail_items().saturating_add(#tail_items);
+                    if b.remaining_rlp_items()? <= reserved_items {
+                        None
+                    } else {
+                        Some(alloy_rlp::RlpDecodable::rlp_decode(b)?)
+                    }
+                },
+            }
+        } else {
+            quote! { #ident: alloy_rlp::private::decode_optional_raw::<#inner_ty>(b, #tail_items)?, }
+        }
+    } else if attributes_include(&field.attrs, "flatten") {
+        quote! {
+            #ident: {
+                let raw_tail_items = b.raw_tail_items().saturating_add(#tail_items);
+                b.with_raw_tail_items(raw_tail_items, |b| alloy_rlp::RlpDecodable::rlp_decode_raw(b))?
+            },
+        }
+    } else {
+        quote! { #ident: alloy_rlp::RlpDecodable::rlp_decode(b)?, }
+    }
+}
+
+pub(crate) fn impl_decodable_tagged(ast: &syn::DeriveInput) -> Result<TokenStream> {
+    let body = parse_enum(ast, "RlpDecodable")?;
+
+    let name = &ast.ident;
+    let generics = make_decode_generics(&ast.generics);
+    let (impl_generics, _, where_clause) = generics.split_for_impl();
+    let (_, ty_generics, _) = ast.generics.split_for_impl();
+
+    let mut match_arms = Vec::new();
+
+    for (i, variant) in body.variants.iter().enumerate() {
+        let var_ident = &variant.ident;
+        let tag_expr = variant_tag_expr(i, variant)?;
+
+        let construct = match &variant.fields {
+            syn::Fields::Named(fields) => {
+                let field_decodes = fields.named.iter().map(|f| {
+                    let fname = f.ident.as_ref().unwrap();
+                    quote! { #fname: alloy_rlp::RlpDecodable::rlp_decode(&mut payload)? }
+                });
+                quote! { #name::#var_ident { #(#field_decodes),* } }
+            }
+            syn::Fields::Unnamed(fields) => {
+                let field_decodes = (0..fields.unnamed.len())
+                    .map(|_| quote! { alloy_rlp::RlpDecodable::rlp_decode(&mut payload)? });
+                quote! { #name::#var_ident(#(#field_decodes),*) }
+            }
+            syn::Fields::Unit => quote! { #name::#var_ident },
+        };
+
+        match_arms.push(quote! {
+            tag if tag == (#tag_expr) as u64 => alloy_rlp::private::Ok(#construct),
+        });
+    }
+
+    Ok(quote! {
+        const _: () = {
+            extern crate alloy_rlp;
+
+            impl #impl_generics alloy_rlp::RlpDecodable<'__alloy_rlp_de> for #name #ty_generics #where_clause {
+                #[inline]
+                fn rlp_decode(decoder: &mut alloy_rlp::Decoder<'__alloy_rlp_de>) -> alloy_rlp::Result<Self> {
+                    let mut payload = decoder.decode_payload(true)?;
+                    let tag_bytepos = payload.bytepos();
+                    let tag = <u64 as alloy_rlp::RlpDecodable<'__alloy_rlp_de>>::rlp_decode(&mut payload)?;
+                    let value = match tag {
+                        #(#match_arms)*
+                        _ => alloy_rlp::private::Err(alloy_rlp::Error::with_bytepos(
+                            alloy_rlp::ErrorKind::Custom("unknown variant tag"),
+                            tag_bytepos,
+                        )),
+                    }?;
+                    if !payload.is_empty() {
+                        return alloy_rlp::private::Err(payload.error(alloy_rlp::ErrorKind::ListLengthMismatch {
+                            expected: 0,
+                            got: payload.len(),
+                        }));
+                    }
+                    alloy_rlp::private::Ok(value)
+                }
+            }
+        };
+    })
+}
+
+fn variant_tag_expr(index: usize, variant: &syn::Variant) -> Result<TokenStream> {
+    Ok(get_tag_value(&variant.attrs)?.map_or_else(
+        || {
+            variant.discriminant.as_ref().map_or_else(
+                || {
+                    let index = index as u64;
+                    quote! { #index }
+                },
+                |(_, expr)| quote! { #expr },
+            )
+        },
+        |expr| quote! { #expr },
+    ))
+}
+
+fn make_decode_generics(generics: &syn::Generics) -> syn::Generics {
+    let mut generics = make_generics(generics, quote!(alloy_rlp::RlpDecodable<'__alloy_rlp_de>));
+    generics.params.insert(0, syn::parse_quote!('__alloy_rlp_de));
+    generics
+}
+
+fn min_raw_items_from<'a>(fields: impl Iterator<Item = (usize, &'a syn::Field)>) -> TokenStream {
+    let exprs = fields.filter_map(|(_, field)| min_raw_items_field(field));
+    quote! { 0usize #( + #exprs)* }
+}
+
+fn min_raw_items_field(field: &syn::Field) -> Option<TokenStream> {
+    if attributes_include(&field.attrs, "default")
+        || attributes_include(&field.attrs, "skip")
+        || is_optional(field)
+    {
+        None
+    } else if attributes_include(&field.attrs, "flatten") {
+        let ty = &field.ty;
+        Some(quote! { <#ty as alloy_rlp::RlpDecodable<'__alloy_rlp_de>>::MIN_RAW_ITEMS })
+    } else {
+        Some(quote! { 1usize })
     }
 }

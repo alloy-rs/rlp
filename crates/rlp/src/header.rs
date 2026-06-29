@@ -1,4 +1,6 @@
-use crate::{decode::static_left_pad, Error, Result, EMPTY_LIST_CODE, EMPTY_STRING_CODE};
+use crate::{
+    decode::static_left_pad, Encoder, Error, ErrorKind, Result, EMPTY_LIST_CODE, EMPTY_STRING_CODE,
+};
 use bytes::{Buf, BufMut};
 use core::hint::unreachable_unchecked;
 
@@ -19,16 +21,35 @@ impl Header {
     /// Returns an error if the buffer is too short or the header is invalid.
     #[inline]
     pub fn decode(buf: &mut &[u8]) -> Result<Self> {
+        Self::decode_at(buf, 0)
+    }
+
+    /// Decodes an RLP header from the given buffer using `bytepos` as the absolute
+    /// byte position of the first byte in `buf`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the buffer is too short or the header is invalid.
+    #[inline]
+    pub fn decode_at(buf: &mut &[u8], bytepos: usize) -> Result<Self> {
+        let started_len = buf.len();
         let payload_length;
         let mut list = false;
-        match get_next_byte(buf)? {
+        match get_next_byte(buf, started_len, bytepos)? {
             0..=0x7F => payload_length = 1,
 
             b @ EMPTY_STRING_CODE..=0xB7 => {
                 buf.advance(1);
                 payload_length = (b - EMPTY_STRING_CODE) as usize;
-                if payload_length == 1 && get_next_byte(buf)? < EMPTY_STRING_CODE {
-                    return Err(Error::NonCanonicalSingleByte);
+                if payload_length == 1
+                    && get_next_byte(buf, started_len, bytepos)? < EMPTY_STRING_CODE
+                {
+                    return Err(error_at(
+                        ErrorKind::NonCanonicalSingleByte,
+                        buf,
+                        started_len,
+                        bytepos,
+                    ));
                 }
             }
 
@@ -47,17 +68,21 @@ impl Header {
                 }
 
                 if buf.len() < len_of_len {
-                    return Err(Error::InputTooShort);
+                    return Err(error_at(ErrorKind::InputTooShort, buf, started_len, bytepos));
                 }
                 // SAFETY: length checked above
                 let len = unsafe { buf.get_unchecked(..len_of_len) };
+                let len_bytepos = current_bytepos(buf, started_len, bytepos);
                 buf.advance(len_of_len);
 
-                let len = u64::from_be_bytes(static_left_pad(len)?);
-                payload_length =
-                    usize::try_from(len).map_err(|_| Error::Custom("Input too big"))?;
+                let len = u64::from_be_bytes(static_left_pad(len).map_err(|err| {
+                    Error::with_bytepos(err.kind(), len_bytepos.saturating_add(err.bytepos()))
+                })?);
+                payload_length = usize::try_from(len).map_err(|_| {
+                    Error::with_bytepos(ErrorKind::Custom("Input too big"), len_bytepos)
+                })?;
                 if payload_length < 56 {
-                    return Err(Error::NonCanonicalSize);
+                    return Err(error_at(ErrorKind::NonCanonicalSize, buf, started_len, bytepos));
                 }
             }
 
@@ -69,7 +94,7 @@ impl Header {
         }
 
         if buf.remaining() < payload_length {
-            return Err(Error::InputTooShort);
+            return Err(error_at(ErrorKind::InputTooShort, buf, started_len, bytepos));
         }
 
         Ok(Self { list, payload_length })
@@ -82,10 +107,28 @@ impl Header {
     /// Returns an error if the buffer is too short or the header is invalid.
     #[inline]
     pub fn decode_bytes<'a>(buf: &mut &'a [u8], is_list: bool) -> Result<&'a [u8]> {
-        let Self { list, payload_length } = Self::decode(buf)?;
+        Self::decode_bytes_at(buf, is_list, 0)
+    }
+
+    /// Decodes the next payload from the given buffer using `bytepos` as the absolute
+    /// byte position of the first byte in `buf`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the buffer is too short or the header is invalid.
+    #[inline]
+    pub fn decode_bytes_at<'a>(
+        buf: &mut &'a [u8],
+        is_list: bool,
+        bytepos: usize,
+    ) -> Result<&'a [u8]> {
+        let Self { list, payload_length } = Self::decode_at(buf, bytepos)?;
 
         if list != is_list {
-            return Err(if is_list { Error::UnexpectedString } else { Error::UnexpectedList });
+            return Err(Error::with_bytepos(
+                if is_list { ErrorKind::UnexpectedString } else { ErrorKind::UnexpectedList },
+                bytepos,
+            ));
         }
 
         // SAFETY: this is already checked in `decode`
@@ -100,8 +143,24 @@ impl Header {
     /// Returns an error if the buffer is too short or the header is invalid.
     #[inline]
     pub fn decode_str<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
-        let bytes = Self::decode_bytes(buf, false)?;
-        core::str::from_utf8(bytes).map_err(|_| Error::Custom("invalid string"))
+        Self::decode_str_at(buf, 0)
+    }
+
+    /// Decodes a string slice from the given buffer using `bytepos` as the absolute
+    /// byte position of the first byte in `buf`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the buffer is too short, the header is invalid, or the
+    /// decoded bytes are not valid UTF-8.
+    #[inline]
+    pub fn decode_str_at<'a>(buf: &mut &'a [u8], bytepos: usize) -> Result<&'a str> {
+        let started_len = buf.len();
+        let bytes = Self::decode_bytes_at(buf, false, bytepos)?;
+        let consumed = started_len.saturating_sub(buf.len());
+        let payload_bytepos = bytepos.saturating_add(consumed.saturating_sub(bytes.len()));
+        core::str::from_utf8(bytes)
+            .map_err(|_| Error::with_bytepos(ErrorKind::Custom("invalid string"), payload_bytepos))
     }
 
     /// Extracts the next payload from the given buffer, advancing it.
@@ -117,7 +176,26 @@ impl Header {
     /// - Any nested headers (for list items) are invalid
     #[inline]
     pub fn decode_raw<'a>(buf: &mut &'a [u8]) -> Result<PayloadView<'a>> {
-        let Self { list, payload_length } = Self::decode(buf)?;
+        Self::decode_raw_at(buf, 0)
+    }
+
+    /// Extracts the next payload from the given buffer using `bytepos` as the absolute
+    /// byte position of the first byte in `buf`.
+    ///
+    /// The returned `PayloadView` provides a structured view of the payload, allowing for efficient
+    /// parsing of nested items without unnecessary allocations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The buffer is too short
+    /// - The header is invalid
+    /// - Any nested headers (for list items) are invalid
+    #[inline]
+    pub fn decode_raw_at<'a>(buf: &mut &'a [u8], bytepos: usize) -> Result<PayloadView<'a>> {
+        let started_len = buf.len();
+        let Self { list, payload_length } = Self::decode_at(buf, bytepos)?;
+        let payload_bytepos = bytepos.saturating_add(started_len.saturating_sub(buf.len()));
         // SAFETY: this is already checked in `decode`
         let mut payload = unsafe { advance_unchecked(buf, payload_length) };
 
@@ -126,12 +204,13 @@ impl Header {
         }
 
         let mut items = alloc::vec::Vec::new();
+        let mut item_bytepos = payload_bytepos;
         while !payload.is_empty() {
             // store the start of the current item for later slice creation
             let item_start = payload;
 
             // decode the header of the next RLP item, advancing the payload
-            let Self { payload_length, .. } = Self::decode(&mut payload)?;
+            let Self { payload_length, .. } = Self::decode_at(&mut payload, item_bytepos)?;
             // SAFETY: this is already checked in `decode`
             unsafe { advance_unchecked(&mut payload, payload_length) };
 
@@ -139,6 +218,7 @@ impl Header {
             // remaining payload length from the initial length
             let item_length = item_start.len() - payload.len();
             items.push(&item_start[..item_length]);
+            item_bytepos = item_bytepos.saturating_add(item_length);
         }
 
         Ok(PayloadView::List(items))
@@ -146,7 +226,7 @@ impl Header {
 
     /// Encodes the header into the `out` buffer.
     #[inline]
-    pub fn encode(&self, out: &mut dyn BufMut) {
+    pub fn encode<T: BufMut>(&self, out: &mut Encoder<T>) {
         if self.payload_length < 56 {
             let code = if self.list { EMPTY_LIST_CODE } else { EMPTY_STRING_CODE };
             out.put_u8(code + self.payload_length as u8);
@@ -180,14 +260,24 @@ pub enum PayloadView<'a> {
     List(alloc::vec::Vec<&'a [u8]>),
 }
 
-/// Same as `buf.first().ok_or(Error::InputTooShort)`.
+/// Same as `buf.first().ok_or(ErrorKind::InputTooShort)`.
 #[inline(always)]
-fn get_next_byte(buf: &[u8]) -> Result<u8> {
+fn get_next_byte(buf: &[u8], started_len: usize, bytepos: usize) -> Result<u8> {
     if buf.is_empty() {
-        return Err(Error::InputTooShort);
+        return Err(error_at(ErrorKind::InputTooShort, &buf, started_len, bytepos));
     }
     // SAFETY: length checked above
     Ok(*unsafe { buf.get_unchecked(0) })
+}
+
+#[inline(always)]
+const fn error_at(kind: ErrorKind, buf: &&[u8], started_len: usize, bytepos: usize) -> Error {
+    Error::with_bytepos(kind, current_bytepos(buf, started_len, bytepos))
+}
+
+#[inline(always)]
+const fn current_bytepos(buf: &&[u8], started_len: usize, bytepos: usize) -> usize {
+    bytepos.saturating_add(started_len.saturating_sub(buf.len()))
 }
 
 /// Same as `let (bytes, rest) = buf.split_at(cnt); *buf = rest; bytes`.
@@ -204,11 +294,11 @@ unsafe fn advance_unchecked<'a>(buf: &mut &'a [u8], cnt: usize) -> &'a [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Encodable;
+    use crate::RlpEncodable;
     use alloc::vec::Vec;
     use core::fmt::Debug;
 
-    fn check_decode_raw_list<T: Encodable + Debug>(input: Vec<T>) {
+    fn check_decode_raw_list<T: RlpEncodable + Debug>(input: Vec<T>) {
         let encoded = crate::encode(&input);
         let expected: Vec<_> = input.iter().map(crate::encode).collect();
         let mut buf = encoded.as_slice();
@@ -251,5 +341,28 @@ mod tests {
         check_decode_raw_string("");
         check_decode_raw_string(" ");
         check_decode_raw_string("test1234");
+    }
+
+    #[test]
+    fn decode_at_reports_absolute_byte_positions() {
+        let mut input = &[0x82][..];
+        let err = Header::decode_at(&mut input, 7).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InputTooShort);
+        assert_eq!(err.bytepos(), 8);
+
+        let mut input = &[0xc0][..];
+        let err = Header::decode_bytes_at(&mut input, false, 11).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::UnexpectedList);
+        assert_eq!(err.bytepos(), 11);
+
+        let mut input = &[0x81, 0xff][..];
+        let err = Header::decode_str_at(&mut input, 13).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Custom("invalid string"));
+        assert_eq!(err.bytepos(), 14);
+
+        let mut input = &[0xc2, 0x01, 0x82][..];
+        let err = Header::decode_raw_at(&mut input, 17).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InputTooShort);
+        assert_eq!(err.bytepos(), 20);
     }
 }
