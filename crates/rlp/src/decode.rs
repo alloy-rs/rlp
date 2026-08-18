@@ -38,6 +38,75 @@ impl<'a> Rlp<'a> {
     }
 }
 
+/// A borrowed cursor over the items of an RLP list.
+///
+/// Unlike [`Rlp`], this cursor can return the original encoding of an item without decoding or
+/// allocating it. This is useful for protocols that need to validate an item's position, count,
+/// or identifier before materializing its contents.
+#[derive(Debug)]
+pub struct RlpList<'a> {
+    payload: &'a [u8],
+}
+
+impl<'a> RlpList<'a> {
+    /// Creates a cursor over the next RLP list in `buf`, advancing `buf` past that list.
+    #[inline]
+    pub fn decode(buf: &mut &'a [u8]) -> Result<Self> {
+        Ok(Self { payload: Header::decode_bytes(buf, true)? })
+    }
+
+    /// Returns the next complete RLP item without decoding it.
+    ///
+    /// The returned slice includes the item's RLP header. It aliases the source buffer and no
+    /// allocation is performed.
+    #[inline]
+    pub fn next_raw(&mut self) -> Result<Option<&'a [u8]>> {
+        if self.payload.is_empty() {
+            return Ok(None);
+        }
+
+        let raw = self.payload;
+        let mut remainder = raw;
+        let header = Header::decode(&mut remainder)?;
+        let header_length = raw.len() - remainder.len();
+        let item_length = header_length + header.payload_length;
+
+        // `Header::decode` verified that the declared payload is available.
+        self.payload = &raw[item_length..];
+        Ok(Some(&raw[..item_length]))
+    }
+
+    /// Decodes the next item in the list.
+    #[inline]
+    pub fn next<T: Decodable>(&mut self) -> Result<Option<T>> {
+        let Some(raw) = self.next_raw()? else { return Ok(None) };
+        T::decode(&mut &*raw).map(Some)
+    }
+
+    /// Counts at most `limit + 1` items in the list.
+    ///
+    /// If the list contains more than `limit` items, returns `limit + 1` without scanning the
+    /// remainder. This makes it suitable for enforcing protocol item limits before allocating a
+    /// decoded collection.
+    #[inline]
+    pub fn count_at_most(&mut self, limit: usize) -> Result<usize> {
+        let mut count = 0;
+        while self.next_raw()?.is_some() {
+            if count == limit {
+                return Ok(limit.saturating_add(1));
+            }
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Returns `true` if the list has no remaining items.
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
+        self.payload.is_empty()
+    }
+}
+
 impl<T: ?Sized> Decodable for PhantomData<T> {
     fn decode(_buf: &mut &[u8]) -> Result<Self> {
         Ok(Self)
@@ -319,6 +388,37 @@ mod tests {
         let out = [0x01];
         let val = bool::decode(&mut &out[..]);
         assert_eq!(Ok(true), val);
+    }
+
+    #[test]
+    fn rlp_list_returns_raw_items_without_allocating_a_collection() {
+        let mut encoded = &hex!("C501820102C0")[..];
+        let mut list = RlpList::decode(&mut encoded).unwrap();
+
+        assert_eq!(list.next_raw().unwrap(), Some(&hex!("01")[..]));
+        assert_eq!(list.next_raw().unwrap(), Some(&hex!("820102")[..]));
+        assert_eq!(list.next_raw().unwrap(), Some(&hex!("C0")[..]));
+        assert_eq!(list.next_raw().unwrap(), None);
+        assert!(list.is_empty());
+        assert!(encoded.is_empty());
+    }
+
+    #[test]
+    fn rlp_list_counts_only_until_the_limit_is_exceeded() {
+        let mut encoded = &hex!("C5C0C0C0C0C0")[..];
+        let mut list = RlpList::decode(&mut encoded).unwrap();
+
+        assert_eq!(list.count_at_most(2), Ok(3));
+        // The cursor stopped at the first excessive item, leaving the remainder untouched.
+        assert_eq!(list.next_raw().unwrap(), Some(&hex!("C0")[..]));
+    }
+
+    #[test]
+    fn rlp_list_validates_each_raw_item_before_returning_it() {
+        let mut encoded = &hex!("C1B8")[..];
+        let mut list = RlpList::decode(&mut encoded).unwrap();
+
+        assert_eq!(list.next_raw(), Err(Error::InputTooShort));
     }
 
     #[test]
