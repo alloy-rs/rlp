@@ -22,29 +22,27 @@ fn borrowed(input: &[u8]) -> alloy_rlp::Result<(Vec<&[u8]>, usize)> {
     Ok((items, input.len() - buf.len()))
 }
 
-fn bounded_count(input: &[u8], limit: usize) -> alloy_rlp::Result<usize> {
+fn has_more_than(input: &[u8], limit: u64) -> alloy_rlp::Result<bool> {
     let mut buf = input;
-    RlpList::decode(&mut buf)?.count_at_most(limit)
+    RlpList::decode(&mut buf)?.has_more_than(limit)
 }
 
-fn assert_differential(input: &[u8], limit: usize) {
+fn assert_differential(input: &[u8]) {
     match (eager(input), borrowed(input)) {
         (Ok((eager_items, eager_consumed)), Ok((borrowed_items, borrowed_consumed))) => {
             assert_eq!(eager_items, borrowed_items);
             assert_eq!(eager_consumed, borrowed_consumed);
-            assert_eq!(bounded_count(input, limit).unwrap(), eager_items.len().min(limit + 1));
-        }
-        (Err(_), Err(_)) => {
-            // `count_at_most` is deliberately permitted to succeed once it has found `limit + 1`
-            // valid items; it need not inspect a malformed suffix after that bound.
-            if let Ok(count) = bounded_count(input, limit) {
-                assert_eq!(count, limit + 1);
+
+            let count = eager_items.len() as u64;
+            for limit in [count.saturating_sub(1), count, count.saturating_add(1)] {
+                assert_eq!(has_more_than(input, limit).unwrap(), count > limit);
             }
         }
+        (Err(_), Err(_)) => {}
         (eager, borrowed) => panic!("eager={eager:?}, borrowed={borrowed:?}"),
     }
 }
 
 fuzz_target!(|input: &[u8]| {
-    assert_differential(input, input.first().copied().unwrap_or_default() as usize);
+    assert_differential(input);
 });

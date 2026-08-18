@@ -79,25 +79,29 @@ impl<'a> RlpList<'a> {
     /// Decodes the next item in the list.
     #[inline]
     pub fn next<T: Decodable>(&mut self) -> Result<Option<T>> {
-        let Some(raw) = self.next_raw()? else { return Ok(None) };
-        T::decode(&mut &*raw).map(Some)
+        let Some(mut raw) = self.next_raw()? else {
+            return Ok(None);
+        };
+        let value = T::decode(&mut raw)?;
+        if !raw.is_empty() {
+            return Err(Error::UnexpectedLength);
+        }
+        Ok(Some(value))
     }
 
-    /// Counts at most `limit + 1` items in the list.
+    /// Returns whether this list contains more than `limit` items.
     ///
-    /// If the list contains more than `limit` items, returns `limit + 1` without scanning the
-    /// remainder. This makes it suitable for enforcing protocol item limits before allocating a
-    /// decoded collection.
+    /// Stops as soon as it encounters the first excessive item, without scanning the remainder.
+    /// This makes it suitable for enforcing protocol item limits before allocating a decoded
+    /// collection.
     #[inline]
-    pub fn count_at_most(&mut self, limit: usize) -> Result<usize> {
-        let mut count = 0;
-        while self.next_raw()?.is_some() {
-            if count == limit {
-                return Ok(limit.saturating_add(1));
+    pub fn has_more_than(&mut self, limit: u64) -> Result<bool> {
+        for _ in 0..limit {
+            if self.next_raw()?.is_none() {
+                return Ok(false);
             }
-            count += 1;
         }
-        Ok(count)
+        Ok(self.next_raw()?.is_some())
     }
 
     /// Returns `true` if the list has no remaining items.
@@ -404,13 +408,47 @@ mod tests {
     }
 
     #[test]
-    fn rlp_list_counts_only_until_the_limit_is_exceeded() {
+    fn rlp_list_stops_after_the_first_excessive_item() {
         let mut encoded = &hex!("C5C0C0C0C0C0")[..];
         let mut list = RlpList::decode(&mut encoded).unwrap();
 
-        assert_eq!(list.count_at_most(2), Ok(3));
+        assert!(list.has_more_than(2).unwrap());
         // The cursor stopped at the first excessive item, leaving the remainder untouched.
         assert_eq!(list.next_raw().unwrap(), Some(&hex!("C0")[..]));
+    }
+
+    #[test]
+    fn rlp_list_accepts_a_u64_limit() {
+        let mut encoded = &hex!("C1C0")[..];
+        let mut list = RlpList::decode(&mut encoded).unwrap();
+
+        assert!(!list.has_more_than(u64::MAX).unwrap());
+    }
+
+    #[test]
+    fn rlp_list_does_not_inspect_a_malformed_suffix_after_exceeding_limit() {
+        // The third item declares a long string but has no length byte. The second valid item is
+        // already sufficient to establish that this list exceeds a limit of one.
+        let mut encoded = &hex!("C3C0C0B8")[..];
+        let mut list = RlpList::decode(&mut encoded).unwrap();
+
+        assert!(list.has_more_than(1).unwrap());
+    }
+
+    #[test]
+    fn rlp_list_next_requires_the_decoder_to_consume_the_item() {
+        struct DoesNotConsume;
+
+        impl Decodable for DoesNotConsume {
+            fn decode(_buf: &mut &[u8]) -> Result<Self> {
+                Ok(Self)
+            }
+        }
+
+        let mut encoded = &hex!("C101")[..];
+        let mut list = RlpList::decode(&mut encoded).unwrap();
+
+        assert!(matches!(list.next::<DoesNotConsume>(), Err(Error::UnexpectedLength)));
     }
 
     #[test]
