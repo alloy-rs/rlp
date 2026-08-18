@@ -1,0 +1,21 @@
+[package]
+name = "alloy-rlp-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+alloy-rlp = { path = "../crates/rlp" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "list_decode_differential"
+path = "fuzz_targets/list_decode_differential.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
