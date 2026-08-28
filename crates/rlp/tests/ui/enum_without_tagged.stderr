@@ -1,0 +1,7 @@
+error: RLP enum derives require `#[rlp(tagged)]`
+ --> tests/ui/enum_without_tagged.rs:4:1
+  |
+4 | / enum Bad {
+5 | |     A,
+6 | | }
+  | |_^
