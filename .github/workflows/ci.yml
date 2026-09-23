@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         rust: ["stable", "beta", "nightly", "1.71"] # MSRV
-        flags: ["--no-default-features", "", "--all-features"]
+        flags: ["--no-default-features", "--no-default-features --features serde", "", "--all-features"]
     steps:
       - name: Secure runner
         uses: tempoxyz/gh-actions/actions/secure-runner@7e2ea6e1a8f5a22f16c2d4b389ffde25da93fa1b # 2026-09-22T22-21-59Z-7e2ea6e1
