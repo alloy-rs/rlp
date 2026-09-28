@@ -10,6 +10,9 @@
 #[allow(unused_imports)]
 extern crate alloc;
 
+#[cfg(feature = "serde")]
+pub mod serde_rlp;
+
 mod decode;
 pub use decode::{decode_append, decode_exact, Decodable, Rlp};
 
