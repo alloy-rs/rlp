@@ -161,9 +161,16 @@ macro_rules! wrap_impl {
     )+};
 }
 
+#[cfg(feature = "arrayvec")]
+impl<const N: usize> Decodable for arrayvec::ArrayVec<u8, N> {
+    #[inline]
+    fn decode(buf: &mut &[u8]) -> Result<Self> {
+        let bytes = Header::decode_bytes(buf, false)?;
+        Self::try_from(bytes).map_err(|_| Error::UnexpectedLength)
+    }
+}
+
 wrap_impl! {
-    #[cfg(feature = "arrayvec")]
-    [const N: usize] <arrayvec::ArrayVec<u8, N>>::from([u8; N]),
     [T: Decodable] <alloc::boxed::Box<T>>::new(T),
     [T: Decodable] <alloc::rc::Rc<T>>::new(T),
     #[cfg(target_has_atomic = "ptr")]
@@ -339,6 +346,22 @@ mod tests {
             (Ok(hex!("6f62636465666768696a6b6c6d")), &hex!("8D6F62636465666768696A6B6C6D")[..]),
             (Err(Error::UnexpectedLength), &hex!("8C6F62636465666768696A6B6C")[..]),
             (Err(Error::UnexpectedLength), &hex!("8E6F62636465666768696A6B6C6D6E")[..]),
+        ])
+    }
+
+    #[test]
+    #[cfg(feature = "arrayvec")]
+    fn rlp_arrayvec() {
+        use arrayvec::ArrayVec;
+
+        let av = |b: &[u8]| ArrayVec::<u8, 4>::try_from(b).unwrap();
+        check_decode([
+            (Ok(av(&[])), &hex!("80")[..]),
+            (Ok(av(&[0x7f])), &hex!("7F")[..]),
+            (Ok(av(&[0xab, 0xcd])), &hex!("82ABCD")[..]),
+            (Ok(av(&[0xab, 0xcd, 0xef, 0x01])), &hex!("84ABCDEF01")[..]),
+            (Err(Error::UnexpectedLength), &hex!("85ABCDEF0123")[..]),
+            (Err(Error::UnexpectedList), &hex!("C0")[..]),
         ])
     }
 
