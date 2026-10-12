@@ -29,10 +29,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install stable Cargo for MSRV dependency resolution
+        if: matrix.rust == '1.71'
+        uses: tempoxyz/gh-actions/vendor/dtolnay/rust-toolchain@2ab28a31ae569be9f780c7675b684471060afa40 # 2026-10-09T21-43-19Z-2ab28a31
+        with:
+          toolchain: stable
       - uses: tempoxyz/gh-actions/vendor/dtolnay/rust-toolchain@2ab28a31ae569be9f780c7675b684471060afa40 # 2026-10-09T21-43-19Z-2ab28a31
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Resolve MSRV-compatible dependencies
+        if: matrix.rust == '1.71'
+        run: cargo +stable generate-lockfile --config 'resolver.incompatible-rust-versions="fallback"'
       - name: test
         run: cargo test --workspace ${{ matrix.flags }}
 
