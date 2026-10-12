@@ -11,17 +11,17 @@
 extern crate alloc;
 
 mod decode;
-pub use decode::{decode_append, decode_exact, Decodable, Rlp};
+pub use decode::{decode_append, decode_exact, Decoder, Rlp, RlpDecodable};
 
 mod error;
-pub use error::{Error, Result};
+pub use error::{Error, ErrorKind, Result};
 
 mod encode;
 #[cfg(feature = "arrayvec")]
 pub use encode::encode_fixed_size;
 pub use encode::{
-    encode, encode_iter, encode_list, length_of_length, list_length, Encodable, MaxEncodedLen,
-    MaxEncodedLenAssoc,
+    encode, encode_iter, encode_list, length_of_length, list_length, Encoder, MaxEncodedLen,
+    MaxEncodedLenAssoc, RlpEncodable,
 };
 
 mod header;
@@ -44,11 +44,12 @@ pub const EMPTY_LIST_CODE: u8 = 0xC0;
 
 // Not public API.
 #[doc(hidden)]
-#[deprecated(since = "0.3.0", note = "use `Error` instead")]
-pub type DecodeError = Error;
+#[deprecated(since = "0.3.0", note = "use `Error` or `ErrorKind` instead")]
+pub type DecodeError = ErrorKind;
 
 #[doc(hidden)]
 pub mod private {
+    pub use crate::decode::decode_optional_raw;
     pub use core::{
         default::Default,
         option::Option::{self, None, Some},
