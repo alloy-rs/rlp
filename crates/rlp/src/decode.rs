@@ -65,6 +65,17 @@ impl Decodable for bool {
 impl<const N: usize> Decodable for [u8; N] {
     #[inline]
     fn decode(from: &mut &[u8]) -> Result<Self> {
+        // A canonical short string of exactly `N` bytes: the header is a single known byte.
+        if N > 1 && N < 56 {
+            if let Some((&b, rest)) = from.split_first() {
+                if b == EMPTY_STRING_CODE + N as u8 && rest.len() >= N {
+                    let (array, rest) = rest.split_at(N);
+                    *from = rest;
+                    return Ok(array.try_into().unwrap());
+                }
+            }
+        }
+
         let bytes = Header::decode_bytes(from, false)?;
         Self::try_from(bytes).map_err(|_| Error::UnexpectedLength)
     }
@@ -383,6 +394,28 @@ mod tests {
             (Err(Error::UnexpectedLength), &hex!("8C6F62636465666768696A6B6C")[..]),
             (Err(Error::UnexpectedLength), &hex!("8E6F62636465666768696A6B6C6D6E")[..]),
         ])
+    }
+
+    #[test]
+    fn rlp_fixed_length_followed_by_trailing_bytes() {
+        let tail = hex!("ffeeddccbbaa9988");
+
+        let mut buf = &hex!("8D6F62636465666768696A6B6C6Dffeeddccbbaa9988")[..];
+        assert_eq!(<[u8; 13]>::decode(&mut buf), Ok(hex!("6f62636465666768696a6b6c6d")));
+        assert_eq!(buf, tail);
+
+        let input = &hex!("8D6F62636465666768696A6B6C6Dffeeddccbbaa9988")[..];
+        assert_eq!(<[u8; 12]>::decode(&mut &input[..]), Err(Error::UnexpectedLength));
+        assert_eq!(<[u8; 14]>::decode(&mut &input[..]), Err(Error::UnexpectedLength));
+
+        assert_eq!(<[u8; 13]>::decode(&mut &hex!("8D6F6263")[..]), Err(Error::InputTooShort));
+
+        let mut buf = &hex!("8105ffeeddccbbaa9988")[..];
+        assert_eq!(<[u8; 1]>::decode(&mut buf), Err(Error::NonCanonicalSingleByte));
+
+        let mut buf = &hex!("8180ffeeddccbbaa9988")[..];
+        assert_eq!(<[u8; 1]>::decode(&mut buf), Ok([0x80]));
+        assert_eq!(buf, tail);
     }
 
     #[test]
