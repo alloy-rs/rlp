@@ -26,6 +26,8 @@ alloy-rlp-derive = { workspace = true, optional = true }
 arrayvec = { workspace = true, optional = true }
 
 [dev-dependencies]
+alloy-rlp-derive.workspace = true
+criterion = { version = "0.5", default-features = false }
 hex.workspace = true
 hex-literal.workspace = true
 
@@ -45,3 +47,7 @@ arrayvec = ["dep:arrayvec"]
 [[example]]
 name = "enum"
 path = "../../examples/enum.rs"
+
+[[bench]]
+name = "rlp"
+harness = false
