@@ -103,11 +103,9 @@ macro_rules! decode_integer {
                         return Ok(0);
                     }
 
-                    // Load a full `N` bytes after the header byte and shift out the ones that
-                    // follow the payload. This stays inside `buf`.
                     if len <= N {
-                        if let Some(Ok(word)) = buf.get(1..=N).map(<[u8; N]>::try_from) {
-                            let first = word[0];
+                        if let Some(payload) = buf.get(1..=len) {
+                            let first = payload[0];
                             if len == 1 {
                                 if first < EMPTY_STRING_CODE {
                                     return Err(Error::NonCanonicalSingleByte);
@@ -115,8 +113,17 @@ macro_rules! decode_integer {
                             } else if first == 0 {
                                 return Err(Error::LeadingZero);
                             }
+
+                            // Load a full `N` bytes and shift out the ones that follow the
+                            // payload. At the end of `buf`, fold the payload instead.
+                            let value = match buf.get(1..=N).map(<[u8; N]>::try_from) {
+                                Some(Ok(word)) => {
+                                    <$t>::from_be_bytes(word) >> (<$t>::BITS as usize - 8 * len)
+                                }
+                                _ => payload.iter().fold(0u128, |v, &x| v << 8 | x as u128) as $t,
+                            };
                             *buf = &buf[1 + len..];
-                            return Ok(<$t>::from_be_bytes(word) >> (<$t>::BITS as usize - 8 * len));
+                            return Ok(value);
                         }
                     }
                 }
