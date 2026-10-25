@@ -61,7 +61,6 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
             extern crate alloy_rlp;
 
             impl #impl_generics alloy_rlp::Decodable for #name #ty_generics #where_clause {
-                #[inline]
                 fn decode(b: &mut &[u8]) -> alloy_rlp::Result<Self> {
                     #(#strict_asserts)*
                     let alloy_rlp::Header { list, payload_length } = alloy_rlp::Header::decode(b)?;
