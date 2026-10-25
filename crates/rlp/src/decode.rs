@@ -1,7 +1,8 @@
-use crate::{Error, Header, Result};
+use crate::{Error, Header, Result, EMPTY_STRING_CODE};
 use bytes::{Bytes, BytesMut};
 use core::{
     marker::{PhantomData, PhantomPinned},
+    mem::size_of,
     num::{NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize},
 };
 
@@ -74,14 +75,56 @@ macro_rules! decode_integer {
         impl Decodable for $t {
             #[inline]
             fn decode(buf: &mut &[u8]) -> Result<Self> {
-                let bytes = Header::decode_bytes(buf, false)?;
-                static_left_pad(bytes).map(<$t>::from_be_bytes)
+                const N: usize = size_of::<$t>();
+
+                if let Some(&b) = buf.first() {
+                    if b < EMPTY_STRING_CODE {
+                        if b == 0 {
+                            return Err(Error::LeadingZero);
+                        }
+                        *buf = &buf[1..];
+                        return Ok(b as $t);
+                    }
+
+                    let len = (b - EMPTY_STRING_CODE) as usize;
+                    if len == 0 {
+                        *buf = &buf[1..];
+                        return Ok(0);
+                    }
+
+                    // Load a full `N` bytes after the header byte and shift out the ones that
+                    // follow the payload. This stays inside `buf`.
+                    if len <= N {
+                        if let Some(Ok(word)) = buf.get(1..=N).map(<[u8; N]>::try_from) {
+                            let first = word[0];
+                            if len == 1 {
+                                if first < EMPTY_STRING_CODE {
+                                    return Err(Error::NonCanonicalSingleByte);
+                                }
+                            } else if first == 0 {
+                                return Err(Error::LeadingZero);
+                            }
+                            *buf = &buf[1 + len..];
+                            return Ok(<$t>::from_be_bytes(word) >> (<$t>::BITS as usize - 8 * len));
+                        }
+                    }
+                }
+
+                decode_integer_slow::<N>(buf).map(<$t>::from_be_bytes)
             }
         }
     )+};
 }
 
 decode_integer!(u8, u16, u32, u64, usize, u128);
+
+/// Decodes the big-endian bytes of an `N`-byte integer through the generic string path.
+///
+/// Outlined so that the integer fast path stays small enough to inline into callers.
+#[inline(never)]
+fn decode_integer_slow<const N: usize>(buf: &mut &[u8]) -> Result<[u8; N]> {
+    static_left_pad(Header::decode_bytes(buf, false)?)
+}
 
 macro_rules! decode_nonzero_integer {
     ($($t:ty => $inner:ty),+ $(,)?) => {$(
@@ -361,6 +404,62 @@ mod tests {
                 &hex!("A101000000000000000000000000000000000000008B000000000000000000000000")[..],
             ),
         ])
+    }
+
+    #[test]
+    fn rlp_uints_followed_by_trailing_bytes() {
+        fn check<T: Decodable + PartialEq + Debug>(input: &[u8], expected: Result<T>, rest: &[u8]) {
+            let mut buf = input;
+            assert_eq!(T::decode(&mut buf), expected, "input: {}", hex::encode(input));
+            if expected.is_ok() {
+                assert_eq!(buf, rest, "input: {}", hex::encode(input));
+            }
+        }
+
+        let tail = hex!("ffeeddccbbaa99887766554433221100");
+
+        for (header, value) in
+            [(&hex!("80")[..], 0), (&hex!("09")[..], 9), (&hex!("8180")[..], 0x80)]
+        {
+            let input = [header, &tail].concat();
+            check(&input, Ok(value as u8), &tail);
+            check(&input, Ok(value as u16), &tail);
+            check(&input, Ok(value as u32), &tail);
+            check(&input, Ok(value as u64), &tail);
+            check(&input, Ok(value as usize), &tail);
+            check(&input, Ok(value as u128), &tail);
+        }
+
+        let input = [&hex!("820505")[..], &tail].concat();
+        check::<u8>(&input, Err(Error::Overflow), &[]);
+        check(&input, Ok(0x0505_u16), &tail);
+        check(&input, Ok(0x0505_u32), &tail);
+        check(&input, Ok(0x0505_u64), &tail);
+        check(&input, Ok(0x0505_usize), &tail);
+        check(&input, Ok(0x0505_u128), &tail);
+
+        let input = [&hex!("88ffffffffffffffff")[..], &tail].concat();
+        check::<u32>(&input, Err(Error::Overflow), &[]);
+        check(&input, Ok(u64::MAX), &tail);
+        check(&input, Ok(u64::MAX as usize), &tail);
+        check(&input, Ok(u64::MAX as u128), &tail);
+
+        let input = [&hex!("90112233445566778899aabbccddeeff00")[..], &tail].concat();
+        check(&input, Ok(0x1122_3344_5566_7788_99aa_bbcc_ddee_ff00_u128), &tail);
+
+        let input = [&hex!("8105")[..], &tail].concat();
+        check::<u8>(&input, Err(Error::NonCanonicalSingleByte), &[]);
+        check::<u64>(&input, Err(Error::NonCanonicalSingleByte), &[]);
+        check::<u128>(&input, Err(Error::NonCanonicalSingleByte), &[]);
+
+        let input = [&hex!("8200f4")[..], &tail].concat();
+        check::<u16>(&input, Err(Error::LeadingZero), &[]);
+        check::<u64>(&input, Err(Error::LeadingZero), &[]);
+        check::<u128>(&input, Err(Error::LeadingZero), &[]);
+
+        let input = [&hex!("00")[..], &tail].concat();
+        check::<u8>(&input, Err(Error::LeadingZero), &[]);
+        check::<u64>(&input, Err(Error::LeadingZero), &[]);
     }
 
     #[test]
