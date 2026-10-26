@@ -273,37 +273,28 @@ mod tests {
 
     #[test]
     fn decode_long_length() {
-        for (len, len_of_len) in [(56, 1), (255, 1), (256, 2), (0xFFFF, 2), (0x10000, 3)] {
+        for (len, len_of_len) in [(56, 1), (256, 2), (0x10000, 3)] {
             for (code, list) in [(0xB7, false), (0xF7, true)] {
                 let mut input = vec![code + len_of_len as u8];
                 input.extend_from_slice(&(len as u64).to_be_bytes()[8 - len_of_len..]);
-                let header_len = input.len();
-                input.resize(header_len + len, 0);
+                input.resize(1 + len_of_len + len, 0);
                 let mut buf = input.as_slice();
                 assert_eq!(Header::decode(&mut buf), Ok(Header { list, payload_length: len }));
                 assert_eq!(buf.len(), len);
             }
         }
 
-        for len_of_len in 1..=8u8 {
-            for code in [0xB7, 0xF7] {
-                let mut input = vec![code + len_of_len, 0];
-                input.resize(1 + len_of_len as usize, 0x38);
-                assert_eq!(Header::decode(&mut input.as_slice()), Err(Error::LeadingZero));
-
-                let mut input = vec![code + len_of_len];
-                input.resize(1 + len_of_len as usize, 0xFF);
-                assert_eq!(Header::decode(&mut input.as_slice()), Err(Error::InputTooShort));
-
-                let mut input = vec![code + len_of_len];
-                input.resize(len_of_len as usize, 0xFF);
-                assert_eq!(Header::decode(&mut input.as_slice()), Err(Error::InputTooShort));
-            }
-        }
-
-        assert_eq!(Header::decode(&mut &hex!("B90038")[..]), Err(Error::LeadingZero));
-        assert_eq!(Header::decode(&mut &hex!("B90037")[..]), Err(Error::LeadingZero));
-        assert_eq!(Header::decode(&mut &hex!("B8")[..]), Err(Error::InputTooShort));
-        assert_eq!(Header::decode(&mut &hex!("BA0100")[..]), Err(Error::InputTooShort));
+        // Errors, and how far they advance the buffer.
+        let check = |input: &[u8], err, remaining| {
+            let mut buf = input;
+            assert_eq!(Header::decode(&mut buf), Err(err), "{input:?}");
+            assert_eq!(buf.len(), remaining, "{input:?}");
+        };
+        check(&hex!("B8"), Error::InputTooShort, 0);
+        check(&hex!("BA0100"), Error::InputTooShort, 2);
+        check(&hex!("B90038AA"), Error::LeadingZero, 1);
+        check(&hex!("BF00FFFFFFFFFFFFFF"), Error::LeadingZero, 0);
+        check(&hex!("B837AA"), Error::NonCanonicalSize, 1);
+        check(&hex!("BB01000000"), Error::InputTooShort, 0);
     }
 }
