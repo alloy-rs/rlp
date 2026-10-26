@@ -1,4 +1,4 @@
-use crate::{decode::static_left_pad, Error, Result, EMPTY_LIST_CODE, EMPTY_STRING_CODE};
+use crate::{Error, Result, EMPTY_LIST_CODE, EMPTY_STRING_CODE};
 use bytes::{Buf, BufMut};
 use core::hint::unreachable_unchecked;
 
@@ -56,7 +56,14 @@ impl Header {
                 let len = unsafe { buf.get_unchecked(..len_of_len) };
                 buf.advance(len_of_len);
 
-                let len = u64::from_be_bytes(static_left_pad(len)?);
+                if len[0] == 0 {
+                    return Err(Error::LeadingZero);
+                }
+                let len = match *len {
+                    [a] => a as u64,
+                    [a, b] => u16::from_be_bytes([a, b]) as u64,
+                    _ => len.iter().fold(0u64, |v, &b| v << 8 | b as u64),
+                };
                 payload_length =
                     usize::try_from(len).map_err(|_| Error::Custom("Input too big"))?;
                 if payload_length < 56 {
@@ -257,6 +264,7 @@ mod tests {
     use crate::Encodable;
     use alloc::vec::Vec;
     use core::fmt::Debug;
+    use hex_literal::hex;
 
     fn check_decode_raw_list<T: Encodable + Debug>(input: Vec<T>) {
         let encoded = crate::encode(&input);
@@ -301,5 +309,32 @@ mod tests {
         check_decode_raw_string("");
         check_decode_raw_string(" ");
         check_decode_raw_string("test1234");
+    }
+
+    #[test]
+    fn decode_long_length() {
+        for (len, len_of_len) in [(56, 1), (256, 2), (0x10000, 3)] {
+            for (code, list) in [(0xB7, false), (0xF7, true)] {
+                let mut input = vec![code + len_of_len as u8];
+                input.extend_from_slice(&(len as u64).to_be_bytes()[8 - len_of_len..]);
+                input.resize(1 + len_of_len + len, 0);
+                let mut buf = input.as_slice();
+                assert_eq!(Header::decode(&mut buf), Ok(Header { list, payload_length: len }));
+                assert_eq!(buf.len(), len);
+            }
+        }
+
+        // Errors, and how far they advance the buffer.
+        let check = |input: &[u8], err, remaining| {
+            let mut buf = input;
+            assert_eq!(Header::decode(&mut buf), Err(err), "{input:?}");
+            assert_eq!(buf.len(), remaining, "{input:?}");
+        };
+        check(&hex!("B8"), Error::InputTooShort, 0);
+        check(&hex!("BA0100"), Error::InputTooShort, 2);
+        check(&hex!("B90038AA"), Error::LeadingZero, 1);
+        check(&hex!("BF00FFFFFFFFFFFFFF"), Error::LeadingZero, 0);
+        check(&hex!("B837AA"), Error::NonCanonicalSize, 1);
+        check(&hex!("BB01000000"), Error::InputTooShort, 0);
     }
 }
