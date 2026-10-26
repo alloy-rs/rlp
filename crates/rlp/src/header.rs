@@ -125,7 +125,17 @@ impl Header {
             return Ok(PayloadView::String(payload));
         }
 
-        let mut items = alloc::vec::Vec::new();
+        // First pass: validate every item and count them, so the vector is allocated once.
+        let mut count = 0;
+        let mut rest = payload;
+        while !rest.is_empty() {
+            let Self { payload_length, .. } = Self::decode(&mut rest)?;
+            // SAFETY: this is already checked in `decode`
+            unsafe { advance_unchecked(&mut rest, payload_length) };
+            count += 1;
+        }
+
+        let mut items = alloc::vec::Vec::with_capacity(count);
         while !payload.is_empty() {
             // store the start of the current item for later slice creation
             let item_start = payload;
