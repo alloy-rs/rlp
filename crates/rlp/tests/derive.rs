@@ -238,3 +238,50 @@ fn skip_field() {
     let decoded = WithoutSkip::decode(&mut buf.as_slice()).unwrap();
     assert_eq!(decoded.value, 42);
 }
+
+/// Test that derived encoding of `Vec` fields matches the manual encoding.
+#[test]
+fn vec_fields_encode() {
+    #[derive(RlpEncodable)]
+    #[rlp(trailing)]
+    struct WithVecs {
+        a: u64,
+        b: Vec<Vec<u8>>,
+        c: Option<Vec<u64>>,
+        d: Option<Vec<Vec<u8>>>,
+    }
+
+    fn expected(a: u64, b: &[Vec<u8>], c: Option<&[u64]>, d: Option<&[Vec<u8>]>) -> Vec<u8> {
+        let mut payload = Vec::new();
+        a.encode(&mut payload);
+        encode_list::<_, Vec<u8>>(b, &mut payload);
+        match c {
+            Some(c) => encode_list::<_, u64>(c, &mut payload),
+            None if d.is_some() => payload.push(EMPTY_STRING_CODE),
+            None => {}
+        }
+        if let Some(d) = d {
+            encode_list::<_, Vec<u8>>(d, &mut payload);
+        }
+        let mut out = Vec::new();
+        Header { list: true, payload_length: payload.len() }.encode(&mut out);
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    for size in [0, 1, 20, 60, 300, 70_000] {
+        let b = vec![vec![0xab; 3]; size / 4];
+        let c = (0..size as u64).collect::<Vec<_>>();
+        let d = vec![vec![0xcd; size % 7]; size / 8];
+
+        for (c, d) in
+            [(None, None), (Some(&c[..]), None), (None, Some(&d[..])), (Some(&c[..]), Some(&d[..]))]
+        {
+            let value =
+                WithVecs { a: 1, b: b.clone(), c: c.map(<[_]>::to_vec), d: d.map(<[_]>::to_vec) };
+            let expected = expected(1, &b, c, d);
+            assert_eq!(encode(&value), expected, "{size}");
+            assert_eq!(value.length(), expected.len(), "{size}");
+        }
+    }
+}

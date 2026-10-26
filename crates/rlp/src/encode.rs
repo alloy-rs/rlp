@@ -28,6 +28,14 @@ pub trait Encodable {
         self.encode(&mut out);
         out.len()
     }
+
+    /// Encodes the type into the `out` buffer, given `length == self.length()`.
+    #[doc(hidden)]
+    #[inline]
+    fn encode_with_length(&self, length: usize, out: &mut dyn BufMut) {
+        let _ = length;
+        self.encode(out)
+    }
 }
 
 // The existence of this function makes the compiler catch if the Encodable
@@ -232,6 +240,27 @@ impl<T: Encodable> Encodable for Vec<T> {
     fn encode(&self, out: &mut dyn BufMut) {
         encode_list(self, out)
     }
+
+    #[inline]
+    fn encode_with_length(&self, length: usize, out: &mut dyn BufMut) {
+        Header { list: true, payload_length: payload_length_from_length(length) }.encode(out);
+        for value in self {
+            value.encode(out);
+        }
+    }
+}
+
+#[inline]
+fn payload_length_from_length(length: usize) -> usize {
+    if length <= 56 {
+        return length - 1;
+    }
+    let bytes = |x: usize| (usize::BITS - x.leading_zeros() + 7) as usize / 8;
+    let mut n = bytes(length - 2);
+    if bytes(length - 1 - n) != n {
+        n -= 1;
+    }
+    length - 1 - n
 }
 
 macro_rules! deref_impl {
@@ -246,6 +275,11 @@ macro_rules! deref_impl {
             #[inline]
             fn encode(&self, out: &mut dyn BufMut) {
                 (**self).encode(out)
+            }
+
+            #[inline]
+            fn encode_with_length(&self, length: usize, out: &mut dyn BufMut) {
+                (**self).encode_with_length(length, out)
             }
         }
     )+};
@@ -322,8 +356,9 @@ mod std_support {
 /// Prefer using [`encode_fixed_size`] if a type implements [`MaxEncodedLen`].
 #[inline]
 pub fn encode<T: Encodable>(value: T) -> Vec<u8> {
-    let mut out = Vec::with_capacity(value.length());
-    value.encode(&mut out);
+    let length = value.length();
+    let mut out = Vec::with_capacity(length);
+    value.encode_with_length(length, &mut out);
     out
 }
 
@@ -609,6 +644,30 @@ mod tests {
         uint_rlp_test!(eth_u512_fixtures());
     }
     */
+
+    #[test]
+    fn payload_length_from_length_is_exact() {
+        // Covers the 0-, 1-, 2- and 3-byte length-of-length ranges, and their boundaries.
+        for p in (0..70_000usize).chain([(1 << 24) - 1, 1 << 24]) {
+            let l = p + length_of_length(p);
+            assert_eq!(payload_length_from_length(l), p, "{p}");
+        }
+    }
+
+    #[test]
+    fn list_encode_with_length() {
+        // Payload lengths around the 55/56, 255/256 and 65535/65536 boundaries.
+        for n in [0, 1, 54, 55, 56, 57, 254, 255, 256, 257, 65_534, 65_535, 65_536, 65_537] {
+            let list = vec![0x7fu8; n];
+            let length = list.length();
+            let mut out = Vec::new();
+            list.encode_with_length(length, &mut out);
+            let mut expected = Vec::new();
+            list.encode(&mut expected);
+            assert_eq!(out, expected, "{n}");
+            assert_eq!(out.len(), length, "{n}");
+        }
+    }
 
     #[test]
     fn rlp_list() {

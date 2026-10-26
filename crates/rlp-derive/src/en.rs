@@ -38,8 +38,16 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
             return Err(Error::new_spanned(field, msg));
         }
 
+        let len_ident = len_ident(length_exprs.len());
         length_exprs.push(encodable_length(i, field, is_opt, trailing_opts, fields.clone()));
-        encode_exprs.push(encodable_field(i, field, is_opt, trailing_opts, fields.clone()));
+        encode_exprs.push(encodable_field(
+            i,
+            field,
+            is_opt,
+            trailing_opts,
+            fields.clone(),
+            len_ident,
+        ));
     }
 
     let no_gaps_asserts = if trailing_opts.no_gaps && opt_field_idents.len() > 1 {
@@ -59,6 +67,7 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         Vec::new()
     };
 
+    let len_idents: Vec<_> = (0..length_exprs.len()).map(len_ident).collect();
     let name = &ast.ident;
     let generics = make_generics(&ast.generics, quote!(alloy_rlp::Encodable));
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
@@ -77,9 +86,10 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
                 #[inline]
                 fn encode(&self, out: &mut dyn alloy_rlp::BufMut) {
                     #(#no_gaps_asserts)*
+                    #(let #len_idents = #length_exprs;)*
                     alloy_rlp::Header {
                         list: true,
-                        payload_length: self._alloy_rlp_payload_length(),
+                        payload_length: 0usize #(+ #len_idents)*,
                     }
                     .encode(out);
                     #(#encode_exprs)*
@@ -127,6 +137,11 @@ pub(crate) fn impl_encodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
                 #[inline]
                 fn encode(&self, out: &mut dyn alloy_rlp::BufMut) {
                     alloy_rlp::Encodable::encode(&self.#ident, out)
+                }
+
+                #[inline]
+                fn encode_with_length(&self, length: usize, out: &mut dyn alloy_rlp::BufMut) {
+                    alloy_rlp::Encodable::encode_with_length(&self.#ident, length, out)
                 }
             }
         };
@@ -213,13 +228,14 @@ fn encodable_field<'a>(
     is_opt: bool,
     trailing_opts: TrailingOpts,
     mut remaining: Peekable<impl Iterator<Item = (usize, &'a syn::Field)>>,
+    len_ident: syn::Ident,
 ) -> TokenStream {
     let ident = field_ident(index, field);
 
     if is_opt {
         let if_some_encode = quote! {
             if let Some(val) = self.#ident.as_ref() {
-                alloy_rlp::Encodable::encode(val, out)
+                alloy_rlp::Encodable::encode_with_length(val, #len_ident, out)
             }
         };
 
@@ -238,8 +254,12 @@ fn encodable_field<'a>(
             quote! { #if_some_encode }
         }
     } else {
-        quote! { alloy_rlp::Encodable::encode(&self.#ident, out); }
+        quote! { alloy_rlp::Encodable::encode_with_length(&self.#ident, #len_ident, out); }
     }
+}
+
+fn len_ident(index: usize) -> syn::Ident {
+    quote::format_ident!("__len{}", index)
 }
 
 fn remaining_opt_fields_some_condition<'a>(
