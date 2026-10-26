@@ -198,11 +198,14 @@ macro_rules! uint_impl {
                         // SAFETY: `chunk` has at least `N + 1` bytes and is not used after
                         // `advance_mut`. `x << (lz * 8)` moves the significant bytes to the
                         // front, so the first `N - lz` bytes after the prefix are the trimmed
-                        // big-endian value; `advance_mut` leaves the rest unclaimed.
+                        // big-endian value. The `lz` zero bytes after it stay inside `chunk`, which
+                        // `advance_mut` leaves unclaimed.
                         unsafe {
                             let ptr = chunk.as_mut_ptr();
                             ptr.write(EMPTY_STRING_CODE + (N - lz) as u8);
-                            ptr.add(1).cast::<[u8; N]>().write_unaligned((x << (lz * 8)).to_be_bytes());
+                            ptr.add(1)
+                                .cast::<[u8; N]>()
+                                .write_unaligned((x << (lz * 8)).to_be_bytes());
                             out.advance_mut(1 + N - lz);
                         }
                     } else {
@@ -699,8 +702,11 @@ mod tests {
         }
     }
 
-    /// A buffer with a fixed capacity whose `chunk_mut` never exposes more than `chunk_limit`
-    /// bytes, so that encoders have to take their fallback paths.
+    /// A buffer with room for `TAIL` bytes after the expected output, whose `chunk_mut` never
+    /// exposes more than `chunk_limit` bytes, so that encoders take both their fast and their
+    /// fallback paths.
+    const TAIL: usize = MAX_HEADER_LEN + 1;
+
     struct LimitedChunk {
         buf: Vec<u8>,
         pos: usize,
@@ -753,10 +759,10 @@ mod tests {
 
         // Every chunk size, from smaller than the header to larger than the item.
         for chunk_limit in sizes(expected.len() + MAX_HEADER_LEN + 1).skip(1) {
-            let mut out = LimitedChunk { buf: vec![0; expected.len()], pos: 0, chunk_limit };
+            let mut out = LimitedChunk { buf: vec![0; expected.len() + TAIL], pos: 0, chunk_limit };
             value.encode(&mut out);
             assert_eq!(out.pos, expected.len(), "chunk_limit={chunk_limit}");
-            assert_eq!(out.buf, expected, "chunk_limit={chunk_limit}");
+            assert_eq!(&out.buf[..expected.len()], expected, "chunk_limit={chunk_limit}");
         }
     }
 
@@ -800,7 +806,12 @@ mod tests {
         check_uints!(u8, u16, u32, u64, u128, usize);
 
         // Byte strings around the single-byte, short and long header boundaries.
-        for len in [0, 1, 2, 54, 55, 56, 57, 255, 256, 257, 65535, 65536, 65537] {
+        let lens: &[usize] = if cfg!(miri) {
+            &[0, 1, 2, 54, 55, 56, 57, 255, 256, 257]
+        } else {
+            &[0, 1, 2, 54, 55, 56, 57, 255, 256, 257, 65535, 65536, 65537]
+        };
+        for &len in lens {
             for first in [0x00, 0x7f, 0x80, 0xff] {
                 let payload =
                     (0..len).map(|i| if i == 0 { first } else { i as u8 }).collect::<Vec<_>>();
@@ -824,12 +835,12 @@ mod tests {
                 header.encode(&mut out);
                 assert_eq!(out, expected);
 
-                for chunk_limit in 1..=expected.len() + 1 {
+                for chunk_limit in 1..=expected.len() + TAIL {
                     let mut out =
-                        LimitedChunk { buf: vec![0; expected.len()], pos: 0, chunk_limit };
+                        LimitedChunk { buf: vec![0; expected.len() + TAIL], pos: 0, chunk_limit };
                     header.encode(&mut out);
                     assert_eq!(out.pos, expected.len(), "chunk_limit={chunk_limit}");
-                    assert_eq!(out.buf, expected, "chunk_limit={chunk_limit}");
+                    assert_eq!(&out.buf[..expected.len()], expected, "chunk_limit={chunk_limit}");
                 }
             }
         }
