@@ -277,6 +277,7 @@ mod tests {
     fn decode_raw_list_lengths_around_stack_limit() {
         for count in 30..=35 {
             check_decode_raw_list(vec![1u64; count]);
+            check_decode_raw_list((0..count as u64).map(|i| vec![i; i as usize % 4]).collect());
         }
     }
 
