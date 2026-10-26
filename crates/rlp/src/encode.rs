@@ -1,4 +1,4 @@
-use crate::{Header, EMPTY_STRING_CODE};
+use crate::{header::MAX_HEADER_LEN, Header, EMPTY_STRING_CODE};
 use bytes::{BufMut, Bytes, BytesMut};
 use core::{
     borrow::Borrow,
@@ -72,7 +72,6 @@ macro_rules! to_be_bytes_trimmed {
         &$be[($x.leading_zeros() / 8) as usize..]
     }};
 }
-pub(crate) use to_be_bytes_trimmed;
 
 impl Encodable for [u8] {
     #[inline]
@@ -86,9 +85,25 @@ impl Encodable for [u8] {
 
     #[inline]
     fn encode(&self, out: &mut dyn BufMut) {
-        if self.len() != 1 || self[0] >= EMPTY_STRING_CODE {
-            Header { list: false, payload_length: self.len() }.encode(out);
+        let len = self.len();
+        if len == 1 && self[0] < EMPTY_STRING_CODE {
+            out.put_u8(self[0]);
+            return;
         }
+        let chunk = out.chunk_mut();
+        if chunk.len() >= len + MAX_HEADER_LEN {
+            // SAFETY: `chunk` has room for the largest header and the payload, and `self` cannot
+            // overlap it because `chunk` is uninitialized memory borrowed from `out`. `chunk` is
+            // not used after `advance_mut`.
+            unsafe {
+                let ptr = chunk.as_mut_ptr();
+                let header_len = Header { list: false, payload_length: len }.encode_unchecked(ptr);
+                core::ptr::copy_nonoverlapping(self.as_ptr(), ptr.add(header_len), len);
+                out.advance_mut(header_len + len);
+            }
+            return;
+        }
+        Header { list: false, payload_length: len }.encode(out);
         out.put_slice(self);
     }
 }
@@ -173,15 +188,34 @@ macro_rules! uint_impl {
             #[inline]
             fn encode(&self, out: &mut dyn BufMut) {
                 let x = *self;
-                if x == 0 {
-                    out.put_u8(EMPTY_STRING_CODE);
-                } else if x < EMPTY_STRING_CODE as $t {
-                    out.put_u8(x as u8);
+                if x < EMPTY_STRING_CODE as $t {
+                    out.put_u8(if x == 0 { EMPTY_STRING_CODE } else { x as u8 });
                 } else {
-                    let be;
-                    let be = to_be_bytes_trimmed!(be, x);
-                    out.put_u8(EMPTY_STRING_CODE + be.len() as u8);
-                    out.put_slice(be);
+                    const N: usize = core::mem::size_of::<$t>();
+                    let lz = x.leading_zeros() as usize / 8;
+                    let chunk = out.chunk_mut();
+                    if chunk.len() > N {
+                        // SAFETY: `chunk` has at least `N + 1` bytes and is not used after
+                        // `advance_mut`. `x << (lz * 8)` moves the significant bytes to the
+                        // front, so the first `N - lz` bytes after the prefix are the trimmed
+                        // big-endian value; `advance_mut` leaves the rest unclaimed.
+                        unsafe {
+                            let ptr = chunk.as_mut_ptr();
+                            ptr.write(EMPTY_STRING_CODE + (N - lz) as u8);
+                            ptr.add(1).cast::<[u8; N]>().write_unaligned((x << (lz * 8)).to_be_bytes());
+                            out.advance_mut(1 + N - lz);
+                        }
+                    } else {
+                        #[cold]
+                        #[inline(never)]
+                        fn slow(x: $t, out: &mut dyn BufMut) {
+                            let be;
+                            let be = to_be_bytes_trimmed!(be, x);
+                            out.put_u8(EMPTY_STRING_CODE + be.len() as u8);
+                            out.put_slice(be);
+                        }
+                        slow(x, out);
+                    }
                 }
             }
         }
@@ -662,6 +696,142 @@ mod tests {
             65535u16 => [255, 255],
             65536u32 => [1, 0, 0],
             65536u64 => [1, 0, 0],
+        }
+    }
+
+    /// A buffer with a fixed capacity whose `chunk_mut` never exposes more than `chunk_limit`
+    /// bytes, so that encoders have to take their fallback paths.
+    struct LimitedChunk {
+        buf: Vec<u8>,
+        pos: usize,
+        chunk_limit: usize,
+    }
+
+    // SAFETY: `chunk_mut` returns a part of `buf[pos..]` and `advance_mut` moves `pos` within
+    // `buf`.
+    unsafe impl BufMut for LimitedChunk {
+        fn remaining_mut(&self) -> usize {
+            self.buf.len() - self.pos
+        }
+
+        unsafe fn advance_mut(&mut self, cnt: usize) {
+            assert!(cnt <= self.remaining_mut());
+            self.pos += cnt;
+        }
+
+        fn chunk_mut(&mut self) -> &mut bytes::buf::UninitSlice {
+            let end = self.buf.len().min(self.pos + self.chunk_limit);
+            bytes::buf::UninitSlice::new(&mut self.buf[self.pos..end])
+        }
+    }
+
+    /// Encodes `value` into buffers with every chunk size, and checks the output.
+    fn check_encoding<T: Encodable + ?Sized>(value: &T, expected: &[u8]) {
+        assert_eq!(value.length(), expected.len());
+
+        // Plenty of room and exactly enough room, through a slice.
+        let mut out = Vec::new();
+        value.encode(&mut out);
+        assert_eq!(out, expected);
+
+        let mut out = vec![0u8; expected.len()];
+        value.encode(&mut out.as_mut_slice());
+        assert_eq!(out, expected);
+
+        // Every amount of spare capacity near the boundaries, after a prefix that is already in
+        // the buffer.
+        let sizes = |max: usize| {
+            (0..=max).filter(move |&n| expected.len() <= 300 || n <= 20 || n + 20 >= max)
+        };
+        for spare in sizes(expected.len() + 1) {
+            let mut out = Vec::with_capacity(3 + spare);
+            out.extend_from_slice(&[0xaa; 3]);
+            value.encode(&mut out);
+            assert_eq!(&out[..3], &[0xaa; 3]);
+            assert_eq!(&out[3..], expected, "spare={spare}");
+        }
+
+        // Every chunk size, from smaller than the header to larger than the item.
+        for chunk_limit in sizes(expected.len() + MAX_HEADER_LEN + 1).skip(1) {
+            let mut out = LimitedChunk { buf: vec![0; expected.len()], pos: 0, chunk_limit };
+            value.encode(&mut out);
+            assert_eq!(out.pos, expected.len(), "chunk_limit={chunk_limit}");
+            assert_eq!(out.buf, expected, "chunk_limit={chunk_limit}");
+        }
+    }
+
+    /// The RLP header of a payload with the given length, computed from the specification.
+    fn reference_header(list: bool, payload_length: usize) -> Vec<u8> {
+        let (short, long) = if list { (0xc0, 0xf7) } else { (0x80, 0xb7) };
+        if payload_length < 56 {
+            return vec![short + payload_length as u8];
+        }
+        let be = payload_length.to_be_bytes();
+        let be = &be[payload_length.leading_zeros() as usize / 8..];
+        [&[long + be.len() as u8], be].concat()
+    }
+
+    #[test]
+    fn encode_all_buffer_capacities() {
+        // Unsigned integers of every width, around every byte-length boundary.
+        macro_rules! check_uints {
+            ($($t:ty),+) => {$(
+                let mut values = vec![0u128, 1, 0x7f, 0x80, 0xff, 0x100, u128::MAX];
+                for bits in (8..=128).step_by(8) {
+                    values.push(1u128 << (bits - 1));
+                    values.push(u128::MAX >> (128 - bits));
+                    values.push(1u128 << (bits - 8));
+                }
+                for value in values {
+                    let Some(x) = <$t>::try_from(value).ok() else { continue };
+                    let expected = match value {
+                        0 => vec![0x80],
+                        1..=0x7f => vec![value as u8],
+                        _ => {
+                            let be = value.to_be_bytes();
+                            let be = &be[value.leading_zeros() as usize / 8..];
+                            [&[0x80 + be.len() as u8], be].concat()
+                        }
+                    };
+                    check_encoding(&x, &expected);
+                }
+            )+};
+        }
+        check_uints!(u8, u16, u32, u64, u128, usize);
+
+        // Byte strings around the single-byte, short and long header boundaries.
+        for len in [0, 1, 2, 54, 55, 56, 57, 255, 256, 257, 65535, 65536, 65537] {
+            for first in [0x00, 0x7f, 0x80, 0xff] {
+                let payload =
+                    (0..len).map(|i| if i == 0 { first } else { i as u8 }).collect::<Vec<_>>();
+                let expected = if len == 1 && first < 0x80 {
+                    payload.clone()
+                } else {
+                    [reference_header(false, len), payload.clone()].concat()
+                };
+                check_encoding(&payload[..], &expected);
+            }
+        }
+
+        // Headers of strings and lists, including payload lengths that need every byte count.
+        for payload_length in [0, 1, 55, 56, 255, 256, 65535, 65536, 1 << 24, usize::MAX >> 8] {
+            for list in [false, true] {
+                let header = Header { list, payload_length };
+                let expected = reference_header(list, payload_length);
+                assert_eq!(header.length(), expected.len());
+
+                let mut out = Vec::new();
+                header.encode(&mut out);
+                assert_eq!(out, expected);
+
+                for chunk_limit in 1..=expected.len() + 1 {
+                    let mut out =
+                        LimitedChunk { buf: vec![0; expected.len()], pos: 0, chunk_limit };
+                    header.encode(&mut out);
+                    assert_eq!(out.pos, expected.len(), "chunk_limit={chunk_limit}");
+                    assert_eq!(out.buf, expected, "chunk_limit={chunk_limit}");
+                }
+            }
         }
     }
 }

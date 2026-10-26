@@ -2,6 +2,9 @@ use crate::{decode::static_left_pad, Error, Result, EMPTY_LIST_CODE, EMPTY_STRIN
 use bytes::{Buf, BufMut};
 use core::hint::unreachable_unchecked;
 
+/// The maximum length of an encoded header.
+pub(crate) const MAX_HEADER_LEN: usize = 1 + core::mem::size_of::<usize>();
+
 /// The header of an RLP item.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Header {
@@ -160,12 +163,49 @@ impl Header {
         if self.payload_length < 56 {
             let code = if self.list { EMPTY_LIST_CODE } else { EMPTY_STRING_CODE };
             out.put_u8(code + self.payload_length as u8);
+            return;
+        }
+        let chunk = out.chunk_mut();
+        if chunk.len() >= MAX_HEADER_LEN {
+            // SAFETY: `chunk` has at least `MAX_HEADER_LEN` bytes and is not used after
+            // `advance_mut`.
+            unsafe {
+                let len = self.encode_unchecked(chunk.as_mut_ptr());
+                out.advance_mut(len);
+            }
         } else {
-            let len_be;
-            let len_be = crate::encode::to_be_bytes_trimmed!(len_be, self.payload_length);
+            #[cold]
+            #[inline(never)]
+            fn slow(header: &Header, out: &mut dyn BufMut) {
+                let mut buf = [0u8; MAX_HEADER_LEN];
+                // SAFETY: `buf` has `MAX_HEADER_LEN` bytes.
+                let len = unsafe { header.encode_unchecked(buf.as_mut_ptr()) };
+                out.put_slice(&buf[..len]);
+            }
+            slow(self, out);
+        }
+    }
+
+    /// Writes the header to `ptr` and returns its length.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be valid for writes of [`MAX_HEADER_LEN`] bytes.
+    #[inline]
+    pub(crate) unsafe fn encode_unchecked(&self, ptr: *mut u8) -> usize {
+        if self.payload_length < 56 {
+            let code = if self.list { EMPTY_LIST_CODE } else { EMPTY_STRING_CODE };
+            ptr.write(code + self.payload_length as u8);
+            1
+        } else {
+            let lz = self.payload_length.leading_zeros() as usize / 8;
+            let n = core::mem::size_of::<usize>() - lz;
             let code = if self.list { 0xF7 } else { 0xB7 };
-            out.put_u8(code + len_be.len() as u8);
-            out.put_slice(len_be);
+            ptr.write(code + n as u8);
+            ptr.add(1)
+                .cast::<[u8; core::mem::size_of::<usize>()]>()
+                .write_unaligned((self.payload_length << (lz * 8)).to_be_bytes());
+            1 + n
         }
     }
 
