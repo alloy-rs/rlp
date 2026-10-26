@@ -79,11 +79,11 @@ impl<const N: usize> Decodable for [u8; N] {
         // A canonical long string of exactly `N` bytes: `0xB8 N` or `0xB9 N_hi N_lo`.
         if N >= 56 && N <= 0xFFFF {
             let [hi, lo] = (N as u16).to_be_bytes();
-            let (header, len): (&[u8], usize) =
-                if N <= 0xFF { (&[0xB8, lo], 2) } else { (&[0xB9, hi, lo], 3) };
-            if from.starts_with(header) {
-                if let Some(array) = from.get(len..len + N) {
-                    *from = &from[len + N..];
+            let (header, len) = if N <= 0xFF { ([0xB8, lo, 0], 2) } else { ([0xB9, hi, lo], 3) };
+            if let Some(rest) = from.strip_prefix(&header[..len]) {
+                if rest.len() >= N {
+                    let (array, rest) = rest.split_at(N);
+                    *from = rest;
                     return Ok(array.try_into().unwrap());
                 }
             }
