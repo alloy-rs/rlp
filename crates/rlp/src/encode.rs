@@ -30,10 +30,11 @@ pub trait Encodable {
     }
 
     /// Encodes the type into the `out` buffer, given `length == self.length()`.
+    ///
+    /// The output is unspecified if `length` differs from `self.length()`.
     #[doc(hidden)]
     #[inline]
-    fn encode_with_length(&self, length: usize, out: &mut dyn BufMut) {
-        let _ = length;
+    fn encode_with_length(&self, _length: usize, out: &mut dyn BufMut) {
         self.encode(out)
     }
 }
@@ -251,16 +252,14 @@ impl<T: Encodable> Encodable for Vec<T> {
 }
 
 #[inline]
-fn payload_length_from_length(length: usize) -> usize {
-    if length <= 56 {
-        return length - 1;
+const fn payload_length_from_length(length: usize) -> usize {
+    let header_length = length_of_length(length - 1);
+    let payload_length = length - header_length;
+    if length_of_length(payload_length) == header_length {
+        payload_length
+    } else {
+        payload_length + 1
     }
-    let bytes = |x: usize| (usize::BITS - x.leading_zeros() + 7) as usize / 8;
-    let mut n = bytes(length - 2);
-    if bytes(length - 1 - n) != n {
-        n -= 1;
-    }
-    length - 1 - n
 }
 
 macro_rules! deref_impl {

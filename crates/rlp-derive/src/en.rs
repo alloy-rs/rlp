@@ -3,7 +3,7 @@ use crate::utils::{
     TrailingOpts, EMPTY_STRING_CODE,
 };
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use std::iter::Peekable;
 use syn::{Error, Result};
 
@@ -20,6 +20,7 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
     let trailing_opts = parse_trailing_opts(&ast.attrs);
 
     let mut encountered_opt_item = false;
+    let mut len_idents = Vec::with_capacity(body.fields.len());
     let mut length_exprs = Vec::with_capacity(body.fields.len());
     let mut encode_exprs = Vec::with_capacity(body.fields.len());
     let mut opt_field_idents = Vec::new();
@@ -38,16 +39,9 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
             return Err(Error::new_spanned(field, msg));
         }
 
-        let len_ident = len_ident(length_exprs.len());
+        len_idents.push(len_ident(i));
         length_exprs.push(encodable_length(i, field, is_opt, trailing_opts, fields.clone()));
-        encode_exprs.push(encodable_field(
-            i,
-            field,
-            is_opt,
-            trailing_opts,
-            fields.clone(),
-            len_ident,
-        ));
+        encode_exprs.push(encodable_field(i, field, is_opt, trailing_opts, fields.clone()));
     }
 
     let no_gaps_asserts = if trailing_opts.no_gaps && opt_field_idents.len() > 1 {
@@ -67,7 +61,6 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         Vec::new()
     };
 
-    let len_idents: Vec<_> = (0..length_exprs.len()).map(len_ident).collect();
     let name = &ast.ident;
     let generics = make_generics(&ast.generics, quote!(alloy_rlp::Encodable));
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
@@ -228,9 +221,9 @@ fn encodable_field<'a>(
     is_opt: bool,
     trailing_opts: TrailingOpts,
     mut remaining: Peekable<impl Iterator<Item = (usize, &'a syn::Field)>>,
-    len_ident: syn::Ident,
 ) -> TokenStream {
     let ident = field_ident(index, field);
+    let len_ident = len_ident(index);
 
     if is_opt {
         let if_some_encode = quote! {
@@ -259,7 +252,7 @@ fn encodable_field<'a>(
 }
 
 fn len_ident(index: usize) -> syn::Ident {
-    quote::format_ident!("__len{}", index)
+    format_ident!("__len{}", index)
 }
 
 fn remaining_opt_fields_some_condition<'a>(
