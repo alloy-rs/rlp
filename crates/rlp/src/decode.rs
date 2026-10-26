@@ -76,9 +76,30 @@ impl<const N: usize> Decodable for [u8; N] {
             }
         }
 
-        let bytes = Header::decode_bytes(from, false)?;
-        Self::try_from(bytes).map_err(|_| Error::UnexpectedLength)
+        // A canonical long string of exactly `N` bytes: `0xB8 N` or `0xB9 N_hi N_lo`.
+        if N >= 56 && N <= 0xFFFF {
+            let [hi, lo] = (N as u16).to_be_bytes();
+            let (header, len): (&[u8], usize) =
+                if N <= 0xFF { (&[0xB8, lo], 2) } else { (&[0xB9, hi, lo], 3) };
+            if from.starts_with(header) {
+                if let Some(array) = from.get(len..len + N) {
+                    *from = &from[len + N..];
+                    return Ok(array.try_into().unwrap());
+                }
+            }
+        }
+
+        decode_array_slow(from)
     }
+}
+
+/// Decodes an `N`-byte array through the generic string path.
+///
+/// Outlined so that the array fast paths stay small enough to inline into callers.
+#[inline(never)]
+fn decode_array_slow<const N: usize>(from: &mut &[u8]) -> Result<[u8; N]> {
+    let bytes = Header::decode_bytes(from, false)?;
+    bytes.try_into().map_err(|_| Error::UnexpectedLength)
 }
 
 macro_rules! decode_integer {
@@ -423,6 +444,70 @@ mod tests {
         let mut buf = &hex!("8180ffeeddccbbaa9988")[..];
         assert_eq!(<[u8; 1]>::decode(&mut buf), Ok([0x80]));
         assert_eq!(buf, tail);
+    }
+
+    #[test]
+    fn rlp_fixed_length_long_strings() {
+        fn encode(len: usize, payload: &[u8]) -> Vec<u8> {
+            let mut out = Vec::new();
+            Header { list: false, payload_length: len }.encode(&mut out);
+            out.extend_from_slice(payload);
+            out
+        }
+
+        fn check<const N: usize>() {
+            let payload: Vec<u8> = (0..N).map(|i| i as u8 | 1).collect();
+            let array = <[u8; N]>::try_from(&payload[..]).unwrap();
+            let tail = hex!("ffeeddcc");
+
+            let encoded = encode(N, &payload);
+            let header_len = encoded.len() - N;
+            assert_eq!(header_len, if N <= 0xFF { 2 } else { 3 });
+
+            let mut buf = &encoded[..];
+            assert_eq!(<[u8; N]>::decode(&mut buf), Ok(array));
+            assert!(buf.is_empty());
+
+            let with_tail = [&encoded[..], &tail].concat();
+            let mut buf = &with_tail[..];
+            assert_eq!(<[u8; N]>::decode(&mut buf), Ok(array));
+            assert_eq!(buf, tail);
+
+            for len in [0, 1, header_len, header_len + 1, encoded.len() - 1] {
+                let mut buf = &encoded[..len];
+                assert_eq!(<[u8; N]>::decode(&mut buf), Err(Error::InputTooShort), "len {len}");
+            }
+
+            // The header declares one byte more or fewer than the array holds.
+            let longer = encode(N + 1, &[&payload[..], &[1]].concat());
+            assert_eq!(<[u8; N]>::decode(&mut &longer[..]), Err(Error::UnexpectedLength));
+            let shorter = encode(N - 1, &payload[..N - 1]);
+            assert_eq!(<[u8; N]>::decode(&mut &shorter[..]), Err(Error::UnexpectedLength));
+
+            // A list header is not a string.
+            let mut list = encoded.clone();
+            list[0] += 0x40;
+            assert_eq!(<[u8; N]>::decode(&mut &list[..]), Err(Error::UnexpectedList));
+        }
+
+        check::<56>();
+        check::<255>();
+        check::<256>();
+        check::<257>();
+        check::<0x0102>();
+        check::<0xFFFF>();
+
+        // The length bytes are big-endian.
+        let buf = [&[0xB9, 0x02, 0x01][..], &[1; 0x0102]].concat();
+        assert_eq!(<[u8; 0x0102]>::decode(&mut &buf[..]), Err(Error::InputTooShort));
+
+        // Length-of-length mismatches and leading zeros in the length are not canonical.
+        let buf = [&[0xB9, 0x00, 0xFF][..], &[1; 255]].concat();
+        assert_eq!(<[u8; 255]>::decode(&mut &buf[..]), Err(Error::LeadingZero));
+        let buf = [&[0xB8, 0x37][..], &[1; 55]].concat();
+        assert_eq!(<[u8; 55]>::decode(&mut &buf[..]), Err(Error::NonCanonicalSize));
+        let buf = [&[0xBA, 0x00, 0x01, 0x00][..], &[1; 256]].concat();
+        assert_eq!(<[u8; 256]>::decode(&mut &buf[..]), Err(Error::LeadingZero));
     }
 
     #[test]
