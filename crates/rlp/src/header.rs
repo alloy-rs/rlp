@@ -125,14 +125,24 @@ impl Header {
             return Ok(PayloadView::String(payload));
         }
 
-        // First pass: validate every item and count them, so the vector is allocated once.
+        // First pass: validate every item and count them, so the vector is allocated once. Lists of
+        // up to `STACK` items are sliced during this pass, avoiding a second one.
+        const STACK: usize = 32;
+        let mut stack = [&[][..]; STACK];
         let mut count = 0;
         let mut rest = payload;
         while !rest.is_empty() {
+            let item_start = rest;
             let Self { payload_length, .. } = Self::decode(&mut rest)?;
             // SAFETY: this is already checked in `decode`
             unsafe { advance_unchecked(&mut rest, payload_length) };
+            if count < STACK {
+                stack[count] = &item_start[..item_start.len() - rest.len()];
+            }
             count += 1;
+        }
+        if count <= STACK {
+            return Ok(PayloadView::List(stack[..count].to_vec()));
         }
 
         let mut items = alloc::vec::Vec::with_capacity(count);
@@ -261,5 +271,28 @@ mod tests {
         check_decode_raw_string("");
         check_decode_raw_string(" ");
         check_decode_raw_string("test1234");
+    }
+
+    #[test]
+    fn decode_raw_list_lengths_around_stack_limit() {
+        for count in 30..=35 {
+            check_decode_raw_list(vec![1u64; count]);
+        }
+    }
+
+    #[test]
+    fn decode_raw_error_after_stack_limit() {
+        for count in 30..=35 {
+            // `count` valid items, then a string header claiming a byte that is missing.
+            let mut payload = vec![0x01; count];
+            payload.push(0x81);
+            let mut encoded = Vec::new();
+            Header { list: true, payload_length: payload.len() }.encode(&mut encoded);
+            encoded.extend_from_slice(&payload);
+            assert_eq!(
+                Header::decode_raw(&mut encoded.as_slice()).err(),
+                Some(Error::InputTooShort)
+            );
+        }
     }
 }
