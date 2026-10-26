@@ -481,7 +481,11 @@ mod tests {
         let input = [&hex!("88ffffffffffffffff")[..], &tail].concat();
         check::<u32>(&input, Err(Error::Overflow), &[]);
         check(&input, Ok(u64::MAX), &tail);
-        check(&input, Ok(u64::MAX as usize), &tail);
+        if usize::BITS == 64 {
+            check(&input, Ok(u64::MAX as usize), &tail);
+        } else {
+            check::<usize>(&input, Err(Error::Overflow), &[]);
+        }
         check(&input, Ok(u64::MAX as u128), &tail);
 
         let input = [&hex!("90112233445566778899aabbccddeeff00")[..], &tail].concat();
