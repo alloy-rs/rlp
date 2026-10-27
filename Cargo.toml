@@ -13,22 +13,22 @@ repository = "https://github.com/alloy-rs/rlp"
 exclude = ["benches/", "tests/"]
 
 [workspace.lints.rust]
-missing-debug-implementations = "warn"
-missing-docs = "warn"
-unreachable-pub = "warn"
-unused-must-use = "deny"
-rust-2018-idioms = "deny"
-unnameable-types = "warn"
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+rust_2018_idioms = "deny"
+unnameable_types = "warn"
 
 [workspace.lints.rustdoc]
 all = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
-missing-const-for-fn = "warn"
-use-self = "warn"
-option-if-let-else = "warn"
-redundant-clone = "warn"
+missing_const_for_fn = "warn"
+use_self = "warn"
+option_if_let_else = "warn"
+redundant_clone = "warn"
 
 [workspace.metadata.docs.rs]
 all-features = true
