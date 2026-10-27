@@ -24,15 +24,20 @@ rustdoc-args = ["--cfg", "docsrs"]
 bytes.workspace = true
 alloy-rlp-derive = { workspace = true, optional = true }
 arrayvec = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 hex.workspace = true
 hex-literal.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+bincode.workspace = true
 
 [features]
 default = ["std"]
-std = ["bytes/std", "arrayvec?/std"]
+std = ["bytes/std", "arrayvec?/std", "serde?/std"]
 derive = ["dep:alloy-rlp-derive"]
+serde = ["dep:serde"]
 # Enables `core::net::` implementations always instead of conditionally through `std`.
 # Requires Rust 1.77 or newer.
 core-net = []
