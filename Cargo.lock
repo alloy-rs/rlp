@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "alloy-rlp"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "alloy-rlp-derive",
  "arrayvec",
@@ -15,7 +15,7 @@ dependencies = [
 
 [[package]]
 name = "alloy-rlp-derive"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "proc-macro2",
  "quote",
