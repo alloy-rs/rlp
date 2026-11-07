@@ -17,7 +17,7 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         .filter(|(_, field)| !attributes_include(&field.attrs, "skip"))
         .peekable();
 
-    let trailing_opts = parse_trailing_opts(&ast.attrs);
+    let trailing_opts = parse_trailing_opts(&ast.attrs)?;
 
     let mut encountered_opt_item = false;
     let mut len_idents = Vec::with_capacity(body.fields.len());
