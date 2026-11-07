@@ -17,7 +17,7 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         .filter(|(_, field)| !attributes_include(&field.attrs, "skip"))
         .peekable();
 
-    let trailing_opts = parse_trailing_opts(&ast.attrs);
+    let trailing_opts = parse_trailing_opts(&ast.attrs)?;
 
     let mut encountered_opt_item = false;
     let mut len_idents = Vec::with_capacity(body.fields.len());
@@ -28,7 +28,7 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
     while let Some((i, field)) = fields.next() {
         let is_opt = is_optional(field);
         if is_opt {
-            if !trailing_opts.enabled {
+            if !trailing_opts.enabled() {
                 let msg = "optional fields are disabled.\nAdd the `#[rlp(trailing)]` attribute to the struct in order to enable optional fields";
                 return Err(Error::new_spanned(field, msg));
             }
@@ -44,7 +44,8 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         encode_exprs.push(encodable_field(i, field, is_opt, trailing_opts, fields.clone()));
     }
 
-    let no_gaps_asserts = if trailing_opts.no_gaps && opt_field_idents.len() > 1 {
+    let no_gaps = matches!(trailing_opts, TrailingOpts::NoGaps { .. });
+    let no_gaps_asserts = if no_gaps && opt_field_idents.len() > 1 {
         let mut asserts = Vec::new();
         for window in opt_field_idents.windows(2) {
             let cur = &window[0];
@@ -197,7 +198,7 @@ fn encodable_length<'a>(
     let ident = field_ident(index, field);
 
     if is_opt {
-        if trailing_opts.no_gaps {
+        if let TrailingOpts::NoGaps { .. } = trailing_opts {
             // no_gaps: no 0x80 placeholders for interior Nones
             quote! { self.#ident.as_ref().map(|val| alloy_rlp::Encodable::length(val)).unwrap_or(0) }
         } else {
@@ -232,7 +233,7 @@ fn encodable_field<'a>(
             }
         };
 
-        if trailing_opts.no_gaps {
+        if let TrailingOpts::NoGaps { .. } = trailing_opts {
             // no_gaps: just encode if Some, skip if None (no placeholder)
             quote! { #if_some_encode }
         } else if remaining.peek().is_some() {

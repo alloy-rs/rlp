@@ -11,7 +11,7 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
 
     let fields = body.fields.iter().enumerate();
 
-    let trailing_opts = parse_trailing_opts(&ast.attrs);
+    let trailing_opts = parse_trailing_opts(&ast.attrs)?;
 
     let mut encountered_opt_item = false;
     let mut decode_stmts = Vec::with_capacity(body.fields.len());
@@ -19,12 +19,12 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
     for (i, field) in fields {
         let is_opt = is_optional(field);
         if is_opt {
-            if !trailing_opts.enabled {
+            if !trailing_opts.enabled() {
                 let msg = "optional fields are disabled.\nAdd the `#[rlp(trailing)]` attribute to the struct in order to enable optional fields";
                 return Err(Error::new_spanned(field, msg));
             }
             encountered_opt_item = true;
-            if trailing_opts.canonical {
+            if trailing_opts.asserts_canonical_inner_types() {
                 if let Some(inner_ty) = option_inner_type(field) {
                     canonical_assert_types.push(inner_ty.clone());
                 }
@@ -130,20 +130,19 @@ fn decodable_field(
     if attributes_include(&field.attrs, "default") {
         quote! { #ident: alloy_rlp::private::Default::default(), }
     } else if is_opt {
-        if trailing_opts.no_gaps {
+        match trailing_opts {
             // no_gaps: no 0x80 sentinel logic; just decode if there's remaining payload
-            quote! {
+            TrailingOpts::NoGaps { .. } => quote! {
                 #ident: if started_len - b.len() < payload_length {
                     Some(alloy_rlp::Decodable::decode(b)?)
                 } else {
                     None
                 },
-            }
-        } else if trailing_opts.canonical {
+            },
             // canonical: 0x80 is only treated as a None placeholder if there is
             // more payload remaining after consuming it. This ensures canonical encoding:
             // trailing None fields must be omitted, not encoded as 0x80.
-            quote! {
+            TrailingOpts::Canonical => quote! {
                 #ident: if started_len - b.len() < payload_length {
                     if alloy_rlp::private::Option::map_or(b.first(), false, |b| *b == #EMPTY_STRING_CODE)
                         && (started_len - b.len() + 1) < payload_length
@@ -156,10 +155,10 @@ fn decodable_field(
                 } else {
                     None
                 },
-            }
-        } else {
-            // plain trailing: 0x80 always treated as None
-            quote! {
+            },
+            // plain trailing: 0x80 always treated as None. Option fields are rejected earlier
+            // when trailing is disabled.
+            TrailingOpts::Placeholders | TrailingOpts::Disabled => quote! {
                 #ident: if started_len - b.len() < payload_length {
                     if alloy_rlp::private::Option::map_or(b.first(), false, |b| *b == #EMPTY_STRING_CODE) {
                         alloy_rlp::Buf::advance(b, 1);
@@ -170,7 +169,7 @@ fn decodable_field(
                 } else {
                     None
                 },
-            }
+            },
         }
     } else {
         quote! { #ident: alloy_rlp::Decodable::decode(b)?, }
