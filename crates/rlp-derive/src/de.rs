@@ -11,7 +11,7 @@ pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
 
     let fields = body.fields.iter().enumerate();
 
-    let trailing_opts = parse_trailing_opts(&ast.attrs);
+    let trailing_opts = parse_trailing_opts(&ast.attrs)?;
 
     let mut encountered_opt_item = false;
     let mut decode_stmts = Vec::with_capacity(body.fields.len());
