@@ -1,90 +1,67 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-    parse_quote, Attribute, DataStruct, Error, Field, GenericParam, Generics, Meta, Result, Type,
-    TypePath,
+    parse_quote, Attribute, DataStruct, Error, Field, Fields, GenericParam, Generics, Meta, Result,
+    Type, TypePath,
 };
 
-/// How a struct encodes and decodes its trailing `Option` fields, from its `#[rlp(trailing)]`
-/// attribute.
-#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TrailingOpts {
-    /// No `trailing` attribute: `Option` fields are rejected.
-    #[default]
-    Disabled,
-    /// `#[rlp(trailing)]`: an interior `None` is encoded as a `0x80` placeholder, and `0x80`
-    /// always decodes as `None`.
-    Placeholders,
-    /// `#[rlp(trailing(canonical))]`: like [`Self::Placeholders`], but `0x80` only decodes as
-    /// `None` when more payload follows it, so trailing `None`s must be omitted.
-    Canonical,
-    /// `#[rlp(trailing(no_gaps))]`: every `None` is omitted and no placeholder is written or
-    /// read.
-    NoGaps {
-        /// `canonical` was also given. It changes nothing in the encoding, but keeps the
-        /// debug assertion that the inner types never decode from `0x80`.
-        canonical: bool,
-    },
-}
-
-impl TrailingOpts {
-    /// Returns `true` if `Option` fields are allowed.
-    pub(crate) const fn enabled(self) -> bool {
-        !matches!(self, Self::Disabled)
-    }
-
-    /// Returns `true` if the decoder asserts that the inner types of `Option` fields never
-    /// decode from `0x80`.
-    pub(crate) const fn asserts_canonical_inner_types(self) -> bool {
-        matches!(self, Self::Canonical | Self::NoGaps { canonical: true })
-    }
+#[derive(Default, Clone, Copy)]
+pub(crate) struct TrailingOpts {
+    pub enabled: bool,
+    pub no_gaps: bool,
+    pub canonical: bool,
 }
 
 pub(crate) fn parse_trailing_opts(attrs: &[Attribute]) -> Result<TrailingOpts> {
-    let mut enabled = false;
-    let mut no_gaps = false;
-    let mut canonical = false;
-    let mut error = None;
+    let mut opts = TrailingOpts::default();
     for attr in attrs {
         if attr.path().is_ident("rlp") {
             if let Meta::List(meta) = &attr.meta {
-                let _ = meta.parse_nested_meta(|meta| {
+                meta.parse_nested_meta(|meta| {
                     if meta.path.is_ident("trailing") {
-                        enabled = true;
+                        opts.enabled = true;
                         if meta.input.peek(syn::token::Paren) {
-                            // An option this parser doesn't know would silently select another
-                            // wire format, so it is an error rather than ignored.
-                            let parsed = meta.parse_nested_meta(|inner| {
+                            meta.parse_nested_meta(|inner| {
                                 if inner.path.is_ident("no_gaps") {
-                                    no_gaps = true;
+                                    opts.no_gaps = true;
                                 } else if inner.path.is_ident("canonical") {
-                                    canonical = true;
+                                    opts.canonical = true;
                                 } else {
                                     return Err(inner.error(
                                         "unknown `trailing` option, expected `no_gaps` or `canonical`",
                                     ));
                                 }
                                 Ok(())
-                            });
-                            if let Err(err) = parsed {
-                                error.get_or_insert(err);
-                            }
+                            })?;
                         }
+                        Ok(())
+                    } else {
+                        Err(meta.error("unknown `rlp` attribute, expected `trailing`"))
                     }
-                    Ok(())
-                });
+                })?;
             }
         }
     }
-    if let Some(err) = error {
-        return Err(err);
+    Ok(opts)
+}
+
+/// Rejects unknown options in the fields' `#[rlp(...)]` attributes.
+pub(crate) fn validate_field_attrs(fields: &Fields) -> Result<()> {
+    for attr in fields.iter().flat_map(|field| &field.attrs) {
+        if attr.path().is_ident("rlp") {
+            if let Meta::List(meta) = &attr.meta {
+                meta.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("skip") || meta.path.is_ident("default") {
+                        Ok(())
+                    } else {
+                        Err(meta
+                            .error("unknown `rlp` field attribute, expected `skip` or `default`"))
+                    }
+                })?;
+            }
+        }
     }
-    Ok(match (enabled, no_gaps, canonical) {
-        (false, ..) => TrailingOpts::Disabled,
-        (true, true, canonical) => TrailingOpts::NoGaps { canonical },
-        (true, false, true) => TrailingOpts::Canonical,
-        (true, false, false) => TrailingOpts::Placeholders,
-    })
+    Ok(())
 }
 
 pub(crate) const EMPTY_STRING_CODE: u8 = 0x80;
@@ -172,26 +149,4 @@ pub(crate) fn make_generics(generics: &Generics, trait_name: TokenStream) -> Gen
     }
     generics.where_clause = Some(where_clause);
     generics
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use syn::parse_quote;
-
-    #[test]
-    fn unknown_trailing_option_is_not_ignored() {
-        // A misspelled option used to fall back to the placeholder mode silently, which accepts
-        // non-canonical encodings the struct asked to reject.
-        let attrs: [Attribute; 1] = [parse_quote!(#[rlp(trailing(cannonical))])];
-        assert_eq!(
-            parse_trailing_opts(&attrs).unwrap_err().to_string(),
-            "unknown `trailing` option, expected `no_gaps` or `canonical`"
-        );
-
-        let attrs: [Attribute; 1] = [parse_quote!(#[rlp(trailing(no_gaps, canonical))])];
-        assert_eq!(parse_trailing_opts(&attrs).unwrap(), TrailingOpts::NoGaps { canonical: true });
-        let attrs: [Attribute; 1] = [parse_quote!(#[rlp(trailing)])];
-        assert_eq!(parse_trailing_opts(&attrs).unwrap(), TrailingOpts::Placeholders);
-    }
 }

@@ -1,6 +1,6 @@
 use crate::utils::{
     attributes_include, field_ident, is_optional, make_generics, parse_struct, parse_trailing_opts,
-    TrailingOpts, EMPTY_STRING_CODE,
+    validate_field_attrs, TrailingOpts, EMPTY_STRING_CODE,
 };
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -9,6 +9,7 @@ use syn::{Error, Result};
 
 pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
     let body = parse_struct(ast, "RlpEncodable")?;
+    validate_field_attrs(&body.fields)?;
 
     let mut fields = body
         .fields
@@ -28,7 +29,7 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
     while let Some((i, field)) = fields.next() {
         let is_opt = is_optional(field);
         if is_opt {
-            if !trailing_opts.enabled() {
+            if !trailing_opts.enabled {
                 let msg = "optional fields are disabled.\nAdd the `#[rlp(trailing)]` attribute to the struct in order to enable optional fields";
                 return Err(Error::new_spanned(field, msg));
             }
@@ -44,8 +45,7 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         encode_exprs.push(encodable_field(i, field, is_opt, trailing_opts, fields.clone()));
     }
 
-    let no_gaps = matches!(trailing_opts, TrailingOpts::NoGaps { .. });
-    let no_gaps_asserts = if no_gaps && opt_field_idents.len() > 1 {
+    let no_gaps_asserts = if trailing_opts.no_gaps && opt_field_idents.len() > 1 {
         let mut asserts = Vec::new();
         for window in opt_field_idents.windows(2) {
             let cur = &window[0];
@@ -144,6 +144,7 @@ pub(crate) fn impl_encodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
 
 pub(crate) fn impl_max_encoded_len(ast: &syn::DeriveInput) -> Result<TokenStream> {
     let body = parse_struct(ast, "RlpMaxEncodedLen")?;
+    validate_field_attrs(&body.fields)?;
 
     let tys = body
         .fields
@@ -198,7 +199,7 @@ fn encodable_length<'a>(
     let ident = field_ident(index, field);
 
     if is_opt {
-        if let TrailingOpts::NoGaps { .. } = trailing_opts {
+        if trailing_opts.no_gaps {
             // no_gaps: no 0x80 placeholders for interior Nones
             quote! { self.#ident.as_ref().map(|val| alloy_rlp::Encodable::length(val)).unwrap_or(0) }
         } else {
@@ -233,7 +234,7 @@ fn encodable_field<'a>(
             }
         };
 
-        if let TrailingOpts::NoGaps { .. } = trailing_opts {
+        if trailing_opts.no_gaps {
             // no_gaps: just encode if Some, skip if None (no placeholder)
             quote! { #if_some_encode }
         } else if remaining.peek().is_some() {

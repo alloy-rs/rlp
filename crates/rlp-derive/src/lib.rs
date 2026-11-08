@@ -65,3 +65,30 @@ pub fn decodable_wrapper(input: TokenStream) -> TokenStream {
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::{parse_quote, DeriveInput};
+
+    #[test]
+    fn unknown_rlp_options_are_rejected() {
+        let valid: DeriveInput = parse_quote! {
+            #[rlp(trailing(no_gaps, canonical))]
+            struct S { #[rlp(skip, default)] a: u64, b: Option<u64> }
+        };
+        assert!(impl_encodable(&valid).is_ok());
+        assert!(impl_decodable(&valid).is_ok());
+
+        let invalid: [DeriveInput; 3] = [
+            parse_quote! { #[rlp(trailing(cannonical))] struct S { a: Option<u64> } },
+            parse_quote! { #[rlp(trailng)] struct S { a: u64 } },
+            parse_quote! { struct S { #[rlp(skpi)] a: u64 } },
+        ];
+        for input in &invalid {
+            assert!(impl_encodable(input).is_err());
+            assert!(impl_decodable(input).is_err());
+        }
+        assert!(impl_max_encoded_len(&invalid[2]).is_err());
+    }
+}
