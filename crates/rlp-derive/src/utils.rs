@@ -1,8 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-    parse_quote, Attribute, DataStruct, Error, Field, GenericParam, Generics, Meta, Result, Type,
-    TypePath,
+    parse_quote, Attribute, DataStruct, Error, Field, Fields, GenericParam, Generics, Meta, Result,
+    Type, TypePath,
 };
 
 #[derive(Default, Clone, Copy)]
@@ -12,12 +12,12 @@ pub(crate) struct TrailingOpts {
     pub canonical: bool,
 }
 
-pub(crate) fn parse_trailing_opts(attrs: &[Attribute]) -> TrailingOpts {
+pub(crate) fn parse_trailing_opts(attrs: &[Attribute]) -> Result<TrailingOpts> {
     let mut opts = TrailingOpts::default();
     for attr in attrs {
         if attr.path().is_ident("rlp") {
             if let Meta::List(meta) = &attr.meta {
-                let _ = meta.parse_nested_meta(|meta| {
+                meta.parse_nested_meta(|meta| {
                     if meta.path.is_ident("trailing") {
                         opts.enabled = true;
                         if meta.input.peek(syn::token::Paren) {
@@ -26,17 +26,42 @@ pub(crate) fn parse_trailing_opts(attrs: &[Attribute]) -> TrailingOpts {
                                     opts.no_gaps = true;
                                 } else if inner.path.is_ident("canonical") {
                                     opts.canonical = true;
+                                } else {
+                                    return Err(inner.error(
+                                        "unknown `trailing` option, expected `no_gaps` or `canonical`",
+                                    ));
                                 }
                                 Ok(())
                             })?;
                         }
+                        Ok(())
+                    } else {
+                        Err(meta.error("unknown `rlp` attribute, expected `trailing`"))
                     }
-                    Ok(())
-                });
+                })?;
             }
         }
     }
-    opts
+    Ok(opts)
+}
+
+/// Rejects unknown options in the fields' `#[rlp(...)]` attributes.
+pub(crate) fn validate_field_attrs(fields: &Fields) -> Result<()> {
+    for attr in fields.iter().flat_map(|field| &field.attrs) {
+        if attr.path().is_ident("rlp") {
+            if let Meta::List(meta) = &attr.meta {
+                meta.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("skip") || meta.path.is_ident("default") {
+                        Ok(())
+                    } else {
+                        Err(meta
+                            .error("unknown `rlp` field attribute, expected `skip` or `default`"))
+                    }
+                })?;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) const EMPTY_STRING_CODE: u8 = 0x80;

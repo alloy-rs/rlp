@@ -1,6 +1,6 @@
 use crate::utils::{
     attributes_include, field_ident, is_optional, make_generics, parse_struct, parse_trailing_opts,
-    TrailingOpts, EMPTY_STRING_CODE,
+    validate_field_attrs, TrailingOpts, EMPTY_STRING_CODE,
 };
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -9,6 +9,7 @@ use syn::{Error, Result};
 
 pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
     let body = parse_struct(ast, "RlpEncodable")?;
+    validate_field_attrs(&body.fields)?;
 
     let mut fields = body
         .fields
@@ -17,7 +18,7 @@ pub(crate) fn impl_encodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
         .filter(|(_, field)| !attributes_include(&field.attrs, "skip"))
         .peekable();
 
-    let trailing_opts = parse_trailing_opts(&ast.attrs);
+    let trailing_opts = parse_trailing_opts(&ast.attrs)?;
 
     let mut encountered_opt_item = false;
     let mut len_idents = Vec::with_capacity(body.fields.len());
@@ -143,6 +144,7 @@ pub(crate) fn impl_encodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
 
 pub(crate) fn impl_max_encoded_len(ast: &syn::DeriveInput) -> Result<TokenStream> {
     let body = parse_struct(ast, "RlpMaxEncodedLen")?;
+    validate_field_attrs(&body.fields)?;
 
     let tys = body
         .fields

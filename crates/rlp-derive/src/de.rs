@@ -1,6 +1,6 @@
 use crate::utils::{
     attributes_include, field_ident, is_optional, make_generics, option_inner_type, parse_struct,
-    parse_trailing_opts, TrailingOpts, EMPTY_STRING_CODE,
+    parse_trailing_opts, validate_field_attrs, TrailingOpts, EMPTY_STRING_CODE,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -8,10 +8,11 @@ use syn::{Error, Result};
 
 pub(crate) fn impl_decodable(ast: &syn::DeriveInput) -> Result<TokenStream> {
     let body = parse_struct(ast, "RlpDecodable")?;
+    validate_field_attrs(&body.fields)?;
 
     let fields = body.fields.iter().enumerate();
 
-    let trailing_opts = parse_trailing_opts(&ast.attrs);
+    let trailing_opts = parse_trailing_opts(&ast.attrs)?;
 
     let mut encountered_opt_item = false;
     let mut decode_stmts = Vec::with_capacity(body.fields.len());
