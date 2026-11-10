@@ -13,6 +13,14 @@ We strongly recommend deriving RLP traits via the `RlpEncodable` and
 
 Trait methods can then be accessed via the `Encodable` and `Decodable` traits.
 
+## Serde adapter
+
+Enable the optional `serde` feature to use `#[serde(with = "alloy_rlp::serde_rlp")]`
+on fields implementing both Serde and RLP traits. Human-readable formats retain the
+field's normal representation, while binary formats use RLP byte strings and reject
+invalid RLP or trailing bytes when decoding. The adapter supports `no_std` with
+`alloc`; use `default-features = false, features = ["serde"]` to enable it without `std`.
+
 ## Trailing Optional Fields
 
 The derive macros support trailing `Option<_>` fields via `#[rlp(trailing)]`.
