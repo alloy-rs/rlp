@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Support named fields in `RlpDecodableWrapper`, matching `RlpEncodableWrapper`.
+
 ### Changed
 
 - Improve `decode_raw` performance ([#34])
