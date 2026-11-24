@@ -32,6 +32,40 @@ const fn wrapper() {
 }
 
 #[test]
+fn wrapper_roundtrip() {
+    #[derive(RlpEncodableWrapper, RlpDecodableWrapper, PartialEq, Debug)]
+    struct TupleWrapper([u8; 3]);
+
+    #[derive(RlpEncodableWrapper, RlpDecodableWrapper, PartialEq, Debug)]
+    struct NamedWrapper {
+        inner: [u8; 3],
+    }
+
+    #[derive(RlpEncodableWrapper, RlpDecodableWrapper, PartialEq, Debug)]
+    struct GenericNamedWrapper<T> {
+        value: T,
+    }
+
+    fn check<T: Encodable + Decodable + PartialEq + core::fmt::Debug>(value: T) {
+        let mut encoded = Vec::new();
+        value.encode(&mut encoded);
+        assert_eq!(encoded, [0x83, 0x80, 0x81, 0x82]);
+        assert_eq!(value.length(), encoded.len());
+
+        encoded.push(0x01);
+        let mut input = encoded.as_slice();
+        assert_eq!(T::decode(&mut input).unwrap(), value);
+        assert_eq!(input, [0x01]);
+        assert_eq!(T::decode(&mut &[][..]), Err(Error::InputTooShort));
+    }
+
+    let inner = [0x80, 0x81, 0x82];
+    check(TupleWrapper(inner));
+    check(NamedWrapper { inner });
+    check(GenericNamedWrapper { value: inner });
+}
+
+#[test]
 const fn generics() {
     trait LT<'a> {}
 

@@ -101,6 +101,7 @@ pub(crate) fn impl_decodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
         let msg = "`RlpEncodableWrapper` is only defined for structs with one field.";
         return Err(Error::new(ast.ident.span(), msg));
     }
+    let ident = field_ident(0, body.fields.iter().next().unwrap());
 
     let name = &ast.ident;
     let generics = make_generics(&ast.generics, quote!(alloy_rlp::Decodable));
@@ -113,7 +114,10 @@ pub(crate) fn impl_decodable_wrapper(ast: &syn::DeriveInput) -> Result<TokenStre
             impl #impl_generics alloy_rlp::Decodable for #name #ty_generics #where_clause {
                 #[inline]
                 fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
-                    alloy_rlp::private::Result::map(alloy_rlp::Decodable::decode(buf), Self)
+                    alloy_rlp::private::Result::map(
+                        alloy_rlp::Decodable::decode(buf),
+                        |value| Self { #ident: value },
+                    )
                 }
             }
         };

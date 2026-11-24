@@ -58,6 +58,7 @@ pub fn decodable(input: TokenStream) -> TokenStream {
 /// individual fields encoded: `<fields...>`
 ///
 /// This is the inverse of `RlpEncodableWrapper`.
+/// The struct must have exactly one field, which may be named or unnamed.
 #[proc_macro_derive(RlpDecodableWrapper, attributes(rlp))]
 pub fn decodable_wrapper(input: TokenStream) -> TokenStream {
     syn::parse(input)
